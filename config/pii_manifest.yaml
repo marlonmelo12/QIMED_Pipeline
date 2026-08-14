@@ -1,0 +1,26 @@
+# pii_manifest.yaml
+# Maps data source types to lists of columns/fields containing PII (Personally Identifiable Information)
+
+datasus_sih:
+  - NASC
+  - N_AIH
+  - CPF_AUT
+  - NOME_PAC
+
+datasus_cnes:
+  - CPF_PROF
+  - NOME_PROF
+
+fhir_patient:
+  - name
+  - identifier
+  - birthDate
+  - telecom
+  - address
+
+fhir_synthetic:
+  - name_family
+  - name_given
+  - birthDate
+  - cpf
+  - raw_json

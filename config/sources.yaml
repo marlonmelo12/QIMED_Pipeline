@@ -1,0 +1,19 @@
+# sources.yaml
+
+datasus_sih:
+  description: "Sistema de Informações Hospitalares"
+  type: "ftp"
+  path: "/dissemin/publicos/SIHSUS/200801_/Dados/"
+  format: "dbc"
+
+datasus_cnes:
+  description: "Cadastro Nacional de Estabelecimentos de Saúde"
+  type: "ftp"
+  path: "/dissemin/publicos/CNES/200508_/Dados/"
+  format: "dbc"
+
+fhir_synthetic:
+  description: "Synthetic FHIR Patient Data"
+  type: "api"
+  endpoint: "https://synthetic-fhir-api.example.com"
+  format: "json"

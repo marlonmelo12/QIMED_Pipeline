@@ -1,0 +1,3 @@
+"""
+lgpd package initialization.
+"""
