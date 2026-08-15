@@ -6,6 +6,12 @@ datasus_sih:
   path: "/dissemin/publicos/SIHSUS/200801_/Dados/"
   format: "dbc"
 
+datasus_sia:
+  description: "Sistema de Informações Ambulatoriais"
+  type: "ftp"
+  path: "/dissemin/publicos/SIASUS/200801_/Dados/"
+  format: "dbc"
+
 datasus_cnes:
   description: "Cadastro Nacional de Estabelecimentos de Saúde"
   type: "ftp"

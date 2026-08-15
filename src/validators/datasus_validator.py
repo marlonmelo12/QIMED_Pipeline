@@ -11,6 +11,10 @@ class DatasusValidator(BaseValidator):
     def validate(self, df: pd.DataFrame) -> ValidationResult:
         if self.subsystem == "SIH":
             required_cols = ["N_AIH", "ANO_CMPT", "MES_CMPT", "PROC_REA"]
+        elif self.subsystem == "SIA":
+            # PA (Producao Ambulatorial) / APAC (Alta Complexidade)
+            # Permite PA_PROC_ID ou AP_PRID ou PA_CODUNI ou AP_CODUF
+            required_cols = ["PA_PROC_ID"] if "PA_PROC_ID" in df.columns else (["AP_PRID"] if "AP_PRID" in df.columns else ["PA_CODUNI"] if "PA_CODUNI" in df.columns else ["PA_MES_CMPT"] if "PA_MES_CMPT" in df.columns else ["PA_PROC_ID"])
         elif self.subsystem == "CNES":
             required_cols = ["CNES", "CODUFMUN"]
         elif self.subsystem == "SINAN":

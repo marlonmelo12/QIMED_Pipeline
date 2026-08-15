@@ -1,6 +1,6 @@
 """
 DATASUS Ingestion Collector for QIMED DataQore.
-Downloads real DBC files via FTP from ftp.datasus.gov.br (SIH, CNES, SINAN)
+Downloads real DBC files via FTP from ftp.datasus.gov.br (SIH, SIA, CNES, SINAN)
 or extracts SISAB primary care datasets, decompresses DBC -> DBF using pyreaddbc,
 and parses records into DataFrames.
 """
@@ -24,18 +24,19 @@ logger = get_logger(__name__)
 
 class DatasusCollector(BaseCollector):
     """
-    Downloads and extracts SIH, CNES, and SINAN microdata from DATASUS FTP servers,
+    Downloads and extracts SIH, SIA, CNES, and SINAN microdata from DATASUS FTP servers,
     or collects SISAB Primary Care indicators.
     """
     FTP_HOST = "ftp.datasus.gov.br"
 
-    def __init__(self, subsystem: str, uf: str = "BR", year: int = 2026, month: int = 1, disease_prefix: str = "DENGBR", config: CollectorConfig = None):
+    def __init__(self, subsystem: str, uf: str = "BR", year: int = 2026, month: int = 1, disease_prefix: str = "DENGBR", sia_subgroup: str = "PA", config: CollectorConfig = None):
         super().__init__(config)
         self.subsystem = subsystem.upper()
         self.uf = uf.upper()
         self.year = year
         self.month = month
         self.disease_prefix = disease_prefix.upper()
+        self.sia_subgroup = sia_subgroup.upper()
 
     def get_source_type(self) -> str:
         return f"datasus_{self.subsystem.lower()}"
@@ -45,6 +46,9 @@ class DatasusCollector(BaseCollector):
         mm = f"{self.month:02d}"
         if self.subsystem == "SIH":
             return f"RD{self.uf}{yy}{mm}.dbc"
+        elif self.subsystem == "SIA":
+            # PA (Producao Ambulatorial), BI (Boletim Individualizado), AQ (Quimioterapia), etc.
+            return f"{self.sia_subgroup}{self.uf}{yy}{mm}.dbc"
         elif self.subsystem == "CNES":
             return f"ST{self.uf}{yy}{mm}.dbc"
         elif self.subsystem == "SINAN":
@@ -63,6 +67,8 @@ class DatasusCollector(BaseCollector):
 
         if self.subsystem == "SIH":
             remote_dirs = ["/dissemin/publicos/SIHSUS/200801_/Dados/"]
+        elif self.subsystem == "SIA":
+            remote_dirs = ["/dissemin/publicos/SIASUS/200801_/Dados/"]
         elif self.subsystem == "CNES":
             remote_dirs = ["/dissemin/publicos/CNES/200508_/Dados/"]
         elif self.subsystem == "SINAN":
@@ -71,7 +77,6 @@ class DatasusCollector(BaseCollector):
                 "/dissemin/publicos/SINAN/DADOS/FINAIS/"
             ]
         elif self.subsystem == "SISAB":
-            # SISAB API extraction
             temp_dir = tempfile.mkdtemp(prefix="qimed_sisab_")
             local_json = os.path.join(temp_dir, filename)
             logger.info(f"Extracting SISAB dataset for year={self.year}, month={self.month}")
