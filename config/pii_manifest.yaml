@@ -11,6 +11,21 @@ datasus_cnes:
   - CPF_PROF
   - NOME_PROF
 
+datasus_sinan:
+  - DT_NASC
+  - NU_NOTIFIC
+  - NM_PACIENT
+  - CPF_PAC
+  - ID_CNS_SUS
+  - NUM_SUS
+  - NM_MAE_PAC
+  - CEP
+
+datasus_sisab:
+  - NU_CPF_PROFISSIONAL
+  - CO_CNES
+  - CO_INE_EQUIPE
+
 fhir_patient:
   - name
   - identifier

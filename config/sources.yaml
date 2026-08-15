@@ -12,6 +12,17 @@ datasus_cnes:
   path: "/dissemin/publicos/CNES/200508_/Dados/"
   format: "dbc"
 
+datasus_sinan:
+  description: "Sistema de Informação de Agravos de Notificação"
+  type: "ftp"
+  path: "/dissemin/publicos/SINAN/DADOS/PRELIM/"
+  format: "dbc"
+
+datasus_sisab:
+  description: "Sistema de Informação em Saúde para a Atenção Básica (e-SUS APS)"
+  type: "api"
+  format: "json"
+
 fhir_synthetic:
   description: "Synthetic FHIR Patient Data"
   type: "api"
