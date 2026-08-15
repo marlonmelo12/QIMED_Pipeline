@@ -42,6 +42,13 @@ temp/
 *.dbc
 *.dbf
 
+# Data Science Exports & Notebooks (Mantidos fora do repositorio)
+exports/
+notebooks/
+*.db
+*.sqlite
+*.sqlite3
+
 # Environment Variables & Secrets
 .env
 
