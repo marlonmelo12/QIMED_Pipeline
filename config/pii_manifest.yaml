@@ -38,6 +38,19 @@ datasus_sisab:
   - CO_CNES
   - CO_INE_EQUIPE
 
+sisreg_regulation:
+  - ID_SOLICITACAO
+  - CNS_PACIENTE
+  - CPF_PACIENTE
+  - NM_PACIENTE
+  - DT_NASC
+  - CRM_SOLICITANTE
+  - CRM_REGULADOR
+
+ans_data:
+  - CD_OPERADORA
+  - CNPJ_OPERADORA
+
 fhir_patient:
   - name
   - identifier

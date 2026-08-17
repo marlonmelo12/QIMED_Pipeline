@@ -14,18 +14,22 @@ class CanonicalDataset:
     """
     dim_patients: pd.DataFrame = field(default_factory=lambda: pd.DataFrame())
     dim_organizations: pd.DataFrame = field(default_factory=lambda: pd.DataFrame())
+    dim_health_plans: pd.DataFrame = field(default_factory=lambda: pd.DataFrame())
     fct_encounters: pd.DataFrame = field(default_factory=lambda: pd.DataFrame())
     fct_conditions: pd.DataFrame = field(default_factory=lambda: pd.DataFrame())
     fct_procedures: pd.DataFrame = field(default_factory=lambda: pd.DataFrame())
+    fct_referrals: pd.DataFrame = field(default_factory=lambda: pd.DataFrame())
     metadata: Dict[str, Any] = field(default_factory=dict)
 
     def summary(self) -> Dict[str, int]:
         return {
             "patients": len(self.dim_patients),
             "organizations": len(self.dim_organizations),
+            "health_plans": len(self.dim_health_plans),
             "encounters": len(self.fct_encounters),
             "conditions": len(self.fct_conditions),
             "procedures": len(self.fct_procedures),
+            "referrals": len(self.fct_referrals),
         }
 
 

@@ -12,6 +12,8 @@ from src.silver.mappers.base_mapper import CanonicalDataset
 from src.silver.mappers.sih_mapper import SihSemanticMapper
 from src.silver.mappers.cnes_mapper import CnesSemanticMapper
 from src.silver.mappers.fhir_mapper import FhirSemanticMapper
+from src.silver.mappers.sisreg_mapper import SisregMapper
+from src.silver.mappers.ans_mapper import AnsMapper
 from src.silver.entity_resolver import EntityResolver
 from src.lakehouse.silver_writer import SilverWriter
 from src.metadata.catalog import DatasetCatalog
@@ -40,6 +42,8 @@ class SilverTransformationPipeline:
         self.sih_mapper = SihSemanticMapper()
         self.cnes_mapper = CnesSemanticMapper()
         self.fhir_mapper = FhirSemanticMapper()
+        self.sisreg_mapper = SisregMapper()
+        self.ans_mapper = AnsMapper()
 
     def transform_dataframe(self, df: pd.DataFrame, source_type: str, source_file: str = "stream") -> CanonicalDataset:
         """
@@ -51,6 +55,10 @@ class SilverTransformationPipeline:
             canonical = self.sih_mapper.map_to_canonical(df, {"source_file": source_file})
         elif source_type in ("datasus_cnes", "cnes"):
             canonical = self.cnes_mapper.map_to_canonical(df, {"source_file": source_file})
+        elif source_type in ("sisreg_regulation", "sisreg"):
+            canonical = self.sisreg_mapper.map_to_canonical(df, {"source_file": source_file})
+        elif source_type in ("ans_data", "ans"):
+            canonical = self.ans_mapper.map_to_canonical(df, {"source_file": source_file})
         elif "fhir" in source_type:
             canonical = self.fhir_mapper.map_to_canonical(df, {"source_file": source_file})
         else:
@@ -79,7 +87,7 @@ class SilverTransformationPipeline:
     def transform_bronze_table(self, relative_table_path: str, source_type: str) -> CanonicalDataset:
         """
         Reads a Bronze Delta table from disk and transforms it to Silver.
-        Example relative_table_path: 'fhir/synthetic' or 'datasus/sih'
+        Example relative_table_path: 'fhir/synthetic', 'datasus/sih', 'sisreg/regulation'
         """
         table_full_path = os.path.join(self.bronze_base_path, relative_table_path)
         if not os.path.exists(table_full_path):

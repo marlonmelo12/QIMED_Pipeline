@@ -39,7 +39,7 @@ class EntityResolver:
         Applies MPI and MFI resolution to all canonical entities in the dataset.
         Adds 'patient_master_id' to dim_patients and all fact tables.
         """
-        if dataset.dim_patients.empty and dataset.fct_encounters.empty:
+        if dataset.dim_patients.empty and dataset.fct_encounters.empty and dataset.fct_referrals.empty:
             return dataset
 
         logger.info("Running Entity Resolution (MPI/MFI linkage)")
@@ -51,7 +51,7 @@ class EntityResolver:
             pts = dataset.dim_patients.copy()
             master_ids = []
             for _, row in pts.iterrows():
-                pid = str(row.get("patient_id", ""))
+                pid = str(row.get("patient_id", row.get("patient_master_id", "")))
                 bhash = str(row.get("birth_date_hash", ""))
                 mcode = str(row.get("municipality_code", ""))
                 mpid = self.generate_master_patient_id(pid, bhash, mcode)
@@ -63,28 +63,40 @@ class EntityResolver:
         # 2. Update Fact Encounters
         if not dataset.fct_encounters.empty:
             encs = dataset.fct_encounters.copy()
-            encs["patient_master_id"] = encs["patient_id"].apply(
-                lambda pid: patient_map.get(pid, self.generate_master_patient_id(pid))
-            )
+            if "patient_id" in encs.columns:
+                encs["patient_master_id"] = encs["patient_id"].apply(
+                    lambda pid: patient_map.get(pid, self.generate_master_patient_id(pid))
+                )
             dataset.fct_encounters = encs
 
         # 3. Update Fact Conditions
         if not dataset.fct_conditions.empty:
             conds = dataset.fct_conditions.copy()
-            conds["patient_master_id"] = conds["patient_id"].apply(
-                lambda pid: patient_map.get(pid, self.generate_master_patient_id(pid))
-            )
+            if "patient_id" in conds.columns:
+                conds["patient_master_id"] = conds["patient_id"].apply(
+                    lambda pid: patient_map.get(pid, self.generate_master_patient_id(pid))
+                )
             dataset.fct_conditions = conds
 
         # 4. Update Fact Procedures
         if not dataset.fct_procedures.empty:
             procs = dataset.fct_procedures.copy()
-            procs["patient_master_id"] = procs["patient_id"].apply(
-                lambda pid: patient_map.get(pid, self.generate_master_patient_id(pid))
-            )
+            if "patient_id" in procs.columns:
+                procs["patient_master_id"] = procs["patient_id"].apply(
+                    lambda pid: patient_map.get(pid, self.generate_master_patient_id(pid))
+                )
             dataset.fct_procedures = procs
 
-        # 5. Organizations MFI
+        # 5. Update Fact Referrals
+        if not dataset.fct_referrals.empty:
+            refs = dataset.fct_referrals.copy()
+            if "patient_id" in refs.columns and "patient_master_id" not in refs.columns:
+                refs["patient_master_id"] = refs["patient_id"].apply(
+                    lambda pid: patient_map.get(pid, self.generate_master_patient_id(pid))
+                )
+            dataset.fct_referrals = refs
+
+        # 6. Organizations MFI
         if not dataset.dim_organizations.empty:
             orgs = dataset.dim_organizations.copy()
             orgs["organization_master_id"] = orgs["organization_id"]

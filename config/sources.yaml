@@ -29,6 +29,17 @@ datasus_sisab:
   type: "api"
   format: "json"
 
+sisreg_regulation:
+  description: "Sistema Nacional de Regulação (Filas e Encaminhamentos SUS)"
+  type: "api_or_export"
+  format: "csv"
+
+ans_data:
+  description: "Agência Nacional de Saúde Suplementar (Beneficiários e Cobertura Privada)"
+  type: "http_dadosabertos"
+  endpoint: "https://dadosabertos.ans.gov.br"
+  format: "csv"
+
 fhir_synthetic:
   description: "Synthetic FHIR Patient Data"
   type: "api"
