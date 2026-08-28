@@ -1,4 +1,4 @@
-# 🏥 QIMED DataQore — Pipeline de Dados e Arquitetura Lakehouse
+# QIMED DataQore — Pipeline de Dados e Arquitetura Lakehouse
 
 Plataforma de engenharia de dados, interoperabilidade em saúde digital e inteligência hospitalar desenvolvida para ingestão, validação, anonimização e normalização semântica de microdados públicos (**DATASUS**, **ANS**, **SISREG**, **SISAB**) e mensagens clínicas estruturadas (**HL7 FHIR R4**). 
 
@@ -6,7 +6,7 @@ O ecossistema consolida os dados em uma arquitetura Lakehouse transacional basea
 
 ---
 
-## 🏛️ 1. Arquitetura do Sistema
+## 1. Arquitetura do Sistema
 
 O pipeline segue o padrão de camadas Lakehouse com processamento desacoplado entre computação e armazenamento:
 
@@ -45,7 +45,7 @@ graph TD
 
 ---
 
-## 🧩 2. Componentes e Módulos do Sistema
+## 2. Componentes e Módulos do Sistema
 
 ### 2.1. Coletores de Dados (`src/collectors/`)
 * **`BaseCollector`**: Classe base abstrata que padroniza o ciclo de vida da ingestão (`fetch` $\rightarrow$ `parse` $\rightarrow$ `detect_pii` $\rightarrow$ `anonymize` $\rightarrow$ `validate` $\rightarrow$ `write_bronze` $\rightarrow$ `register_catalog`). Possui controle de checkpoints, retries com backoff exponencial e circuit breaker.
@@ -79,7 +79,7 @@ graph TD
 
 ---
 
-## 📁 3. Estrutura de Diretórios do Projeto
+## 3. Estrutura de Diretórios do Projeto
 
 ```
 QIMED/
@@ -147,7 +147,7 @@ QIMED/
 
 ---
 
-## 🔑 5. Variáveis de Ambiente (`.env`)
+## 5. Variáveis de Ambiente (`.env`)
 
 Copie o modelo para criar seu arquivo local:
 ```bash
@@ -180,7 +180,7 @@ O pipeline aceita qualquer uma das **27 Unidades Federativas** ou a sigla especi
 
 ---
 
-## 🚀 7. Como Executar
+## 7. Como Executar
 
 ### Opção A: Execução Standalone via CLI (Rápida e Leve)
 
@@ -230,7 +230,7 @@ curl -X POST "http://localhost:8088/api/v1/dags/qimed_master_pipeline_end_to_end
 
 ---
 
-## 📊 8. Modelo de Dados Canônico em Português
+## 8. Modelo de Dados Canônico em Português
 
 ### 8.1. Camada Silver (Delta Lake em `lakehouse/silver/`)
 * **`dim_paciente`**: Entidade paciente unificada via Master Patient Index (MPI), dados demográficos e hash de linkage.
