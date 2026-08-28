@@ -10,8 +10,6 @@ from src.collectors.datasus_collector import DatasusCollector
 from src.collectors.tiss_collector import TissCollector, TABELA_38_TUSS_GLOSAS
 from src.dw.maintenance import otimizar_storage_duckdb
 
-DICIONARIO_PATH = "docs/dicionario_silver_duckdb.md"
-
 
 def test_datasus_collector_sih_rj_url():
     """Validar montagem correta da URL FTP para SIH-RJ."""
@@ -66,28 +64,25 @@ def test_otimizacao_storage_duckdb(tmp_path):
     assert cnt == 1000
 
 
-def test_dicionario_tagging_completo():
-    """Validar que todas as entidades do dicionário possuem tag formal de ciclo de vida."""
-    assert os.path.exists(DICIONARIO_PATH), f"Dicionário {DICIONARIO_PATH} não encontrado."
-    with open(DICIONARIO_PATH, "r", encoding="utf-8") as f:
-        content = f.read()
+from src.metadata.catalogo_dados import CATALOGO_ENTIDADES
 
-    headers = re.findall(r"##\s+`?([a-zA-Z0-9_]+)`?\s+\[STATUS:\s+([^\]]+)\]", content)
-    assert len(headers) >= 10, f"Foram encontradas apenas {len(headers)} entidades com tags no dicionário."
 
-    valid_tags = {
-        "ENTREGUE / SILVER ATIVA",
-        "ENTREGUE / GOLD DW ATIVA",
-        "EM IMPLEMENTAÇÃO / ROADMAP EXPANSÃO"
-    }
+def test_catalogo_entidades_completo():
+    """Validar que todas as entidades do catálogo de dados possuem descrição técnica formal."""
+    assert len(CATALOGO_ENTIDADES) >= 10, f"Foram encontradas apenas {len(CATALOGO_ENTIDADES)} entidades no catálogo."
 
-    for entidade, status in headers:
-        assert status in valid_tags, f"Entidade '{entidade}' possui tag inválida: '{status}'"
+    entidades_esperadas = [
+        "fct_internacao",
+        "fct_atendimentos_ambulatoriais",
+        "fct_ressarcimento_sus",
+        "fct_glosas_hospitalares",
+        "aud_alertas_anomalias",
+        "dim_paciente",
+        "dim_operadoras_saude",
+        "dim_estabelecimento",
+        "dim_tempo",
+    ]
 
-    entidades_encontradas = [h[0] for h in headers]
-    assert "fct_internacao" in entidades_encontradas
-    assert "fct_atendimentos_ambulatoriais" in entidades_encontradas
-    assert "fct_ressarcimento_sus" in entidades_encontradas
-    assert "fct_glosas_hospitalares" in entidades_encontradas
-    assert "fct_glosas_tiss" in entidades_encontradas
-    assert "aud_alertas_anomalias" in entidades_encontradas
+    for ent in entidades_esperadas:
+        assert ent in CATALOGO_ENTIDADES, f"Entidade '{ent}' ausente do catálogo."
+        assert len(CATALOGO_ENTIDADES[ent]) > 10, f"Descrição técnica de '{ent}' muito curta."

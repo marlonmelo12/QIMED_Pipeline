@@ -48,7 +48,7 @@ graph TD
 ## 2. Componentes e Módulos do Sistema
 
 ### 2.1. Coletores de Dados (`src/collectors/`)
-* **`BaseCollector`**: Classe base abstrata que padroniza o ciclo de vida da ingestão (`fetch` $\rightarrow$ `parse` $\rightarrow$ `detect_pii` $\rightarrow$ `anonymize` $\rightarrow$ `validate` $\rightarrow$ `write_bronze` $\rightarrow$ `register_catalog`). Possui controle de checkpoints, retries com backoff exponencial e circuit breaker.
+* **`BaseCollector`**: Classe base abstrata que padroniza o ciclo de vida da ingestão (`fetch` -> `parse` -> `detect_pii` -> `anonymize` -> `validate` -> `write_bronze` -> `register_catalog`). Possui controle de checkpoints, retries com backoff exponencial e circuit breaker.
 * **`DatasusCollector`**: Conexão com servidores FTP públicos do DATASUS (`ftp.datasus.gov.br`). Realiza download de arquivos `RD*.dbc` (SIH Internações), `RJ*.dbc` (AIHs Rejeitadas), `ER*.dbc` (Críticas de faturamento), `PA*.dbc` (SIA Ambulatorial) e `ST*.dbc` (CNES Estabelecimentos), com descompressão binária `pyreaddbc` e extração em streaming.
 * **`AnsCollector`**: Coleta de cadastros de operadoras (CADOP), beneficiários (SIB), ressarcimento ao SUS (ABI) e notificações de intermediação preliminar (NIP) com tratamento de codificação e modalidades.
 * **`TissCollector`**: Extração e parsing de demonstrativos e tabelas de glosas no padrão TISS (Tabela 38 da TUSS/ANS).
@@ -73,9 +73,9 @@ graph TD
 ### 2.4. Camada Gold, Data Marts e Machine Learning (`src/gold/`)
 * **`GoldPipelineNacional`**: Consolidação vetorial dos Data Marts no DuckDB DW com otimização out-of-core (`CHECKPOINT` e `VACUUM`).
 * **Views Semânticas Anti-Leakage**:
-  * `vw_ml_features_admissao`: Apenas covariáveis de entrada disponíveis no momento da internação em $t_0$.
+  * `vw_ml_features_admissao`: Apenas covariáveis de entrada disponíveis no momento da internação em t0.
   * `vw_ml_targets_internacao`: Alvos de desfecho pós-alta (óbito hospitalar, permanência prolongada, readmissão).
-* **`DataQualityAuditor` (`src/quality/`)**: Auditoria forense automatizada de integridade relacional, consistência temporal e detecção de anomalias estatísticas ($P_{99}$).
+* **`DataQualityAuditor` (`src/quality/`)**: Auditoria forense automatizada de integridade relacional, consistência temporal e detecção de anomalias estatísticas (P99).
 
 ---
 
@@ -102,9 +102,6 @@ QIMED/
 │   ├── dag_silver_transformation.py # Transformação Canônica Silver com MPI
 │   ├── dag_gold_aggregation.py    # Consolidação de Data Marts no DuckDB DW
 │   └── dag_data_quality_audit.py  # Auditoria Forense Automatizada de Qualidade
-├── docs/                          # Especificações técnicas e dicionários de dados
-│   ├── especificacao_integracao_pipeline.md # Contrato de integração, DDLs e Webhooks
-│   └── dicionario_silver_duckdb.md          # Dicionário formal de dados da Camada Silver
 ├── src/                           # Código-fonte modular da plataforma
 │   ├── api/                       # Endpoints e guardrails clínicos
 │   ├── collectors/                # Coletores de dados (DATASUS, ANS, TISS, FHIR, SISREG)
@@ -129,7 +126,7 @@ QIMED/
 
 ---
 
-## 💻 4. Requisitos de Sistema & Dimensionamento de Hardware
+## 4. Requisitos de Sistema e Dimensionamento de Hardware
 
 ### 4.1. Tabela de Requisitos
 
@@ -168,7 +165,7 @@ cp .env.example .env
 
 ---
 
-## 📅 6. Parâmetros Operacionais de Execução (Mês, Ano e UF)
+## 6. Parâmetros Operacionais de Execução (Mês, Ano e UF)
 
 ### 6.1. Disponibilidade das Fontes Públicas
 * **DATASUS (SIH e SIA):** Arquivos `RD*.dbc` e `PA*.dbc` são publicados com **1 a 2 meses de defasagem** (ex.: competência Maio/2026 é publicada entre Junho e Julho/2026).
@@ -251,4 +248,4 @@ curl -X POST "http://localhost:8088/api/v1/dags/qimed_master_pipeline_end_to_end
 * **`dm_patient_readmissions`**: Taxa de readmissão precoce em 30 dias.
 * **`dm_icsap_prevention`**: Internações por Condições Sensíveis à Atenção Primária.
 * **`dm_regulation_bottlenecks`**: Gargalos e tempo de espera na regulação.
-* **`aud_alertas_anomalias`**: Central forense de alertas e anomalias de faturamento ($P_{99}$).
+* **`aud_alertas_anomalias`**: Central forense de alertas e anomalias de faturamento (P99).
