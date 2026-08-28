@@ -1,15 +1,21 @@
+version: '3.8'
+
 x-airflow-common:
   &airflow-common
   build: .
   environment:
     - AIRFLOW__CORE__EXECUTOR=LocalExecutor
-    - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://airflow:airflow@postgres/airflow
+    - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://airflow:airflow@postgres:5432/airflow
     - AIRFLOW__CORE__DAGS_FOLDER=/opt/qimed/dags
     - AIRFLOW__CORE__LOAD_EXAMPLES=False
     - AIRFLOW__WEBSERVER__SECRET_KEY=qimed_secret_key_change_in_prod
     - PYTHONPATH=/opt/qimed
-    - SALT_SECRET=qimed_dev_salt_2026
+    - QIMED_MPI_SALT=${QIMED_MPI_SALT:-qimed_dev_salt_2026_mpi_secret_key}
+    - SALT_SECRET=${SALT_SECRET:-qimed_dev_salt_2026}
     - LAKEHOUSE_PATH=/opt/qimed/lakehouse/bronze
+    - LAKEHOUSE_ROOT=/opt/qimed/lakehouse
+    - WAREHOUSE_PATH=/opt/qimed/warehouse
+    - LOG_LEVEL=${LOG_LEVEL:-INFO}
   volumes:
     - ./dags:/opt/qimed/dags
     - ./src:/opt/qimed/src
@@ -21,25 +27,26 @@ x-airflow-common:
   depends_on:
     postgres:
       condition: service_healthy
-  dns:
-    - 8.8.8.8
-    - 1.1.1.1
   networks:
     - qimed-network
 
 services:
   postgres:
     image: postgres:13
+    restart: always
     environment:
       - POSTGRES_USER=airflow
       - POSTGRES_PASSWORD=airflow
       - POSTGRES_DB=airflow
     ports:
       - "5432:5432"
+    volumes:
+      - postgres-db-volume:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD", "pg_isready", "-U", "airflow"]
-      interval: 10s
-      retries: 5
+      test: ["CMD-SHELL", "pg_isready -U airflow -d airflow"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
       start_period: 5s
     networks:
       - qimed-network
@@ -50,6 +57,7 @@ services:
       - bash
       - -c
       - |
+        echo "Aguardando PostgreSQL ficar pronto..."
         airflow db migrate &&
         airflow users create \
           --username admin \
@@ -82,11 +90,15 @@ services:
   airflow-scheduler:
     <<: *airflow-common
     command: airflow scheduler
+    restart: on-failure
     depends_on:
       airflow-init:
         condition: service_completed_successfully
     networks:
       - qimed-network
+
+volumes:
+  postgres-db-volume:
 
 networks:
   qimed-network:
