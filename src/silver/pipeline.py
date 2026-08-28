@@ -8,6 +8,7 @@ from typing import Dict, Any, Optional
 import pandas as pd
 from deltalake import DeltaTable
 
+from src.processing.duckdb_engine import DuckDBEngine
 from src.silver.mappers.base_mapper import CanonicalDataset
 from src.silver.mappers.sih_mapper import SihSemanticMapper
 from src.silver.mappers.cnes_mapper import CnesSemanticMapper
@@ -27,7 +28,7 @@ class SilverTransformationPipeline:
     Orchestrates the end-to-end transformation of Bronze datasets into canonical Silver tables.
     """
 
-    def __init__(self, bronze_base_path: str = None, silver_base_path: str = None):
+    def __init__(self, bronze_base_path: str = None, silver_base_path: str = None, duck_engine: Optional[Any] = None):
         base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
         self.bronze_base_path = bronze_base_path or os.getenv(
             "LAKEHOUSE_PATH", os.path.join(base_dir, "lakehouse", "bronze")
@@ -35,6 +36,7 @@ class SilverTransformationPipeline:
         self.silver_base_path = silver_base_path or os.getenv(
             "SILVER_LAKEHOUSE_PATH", os.path.join(base_dir, "lakehouse", "silver")
         )
+        self.duck_engine = duck_engine or DuckDBEngine()
         self.resolver = EntityResolver()
         self.writer = SilverWriter(silver_base_path=self.silver_base_path)
         self.catalog = DatasetCatalog()
@@ -94,7 +96,17 @@ class SilverTransformationPipeline:
             raise FileNotFoundError(f"Bronze table not found at {table_full_path}")
 
         logger.info(f"Reading Bronze Delta table from {table_full_path}")
-        dt = DeltaTable(table_full_path)
-        bronze_df = dt.to_pandas()
+        normalized_path = table_full_path.replace("\\", "/")
+        query = f"SELECT * FROM delta_scan('{normalized_path}')"
+        try:
+            bronze_arrow = self.duck_engine.fetch_arrow(query)
+            bronze_df = bronze_arrow.to_pandas()
+        except Exception as e:
+            logger.warning(
+                f"[SILVER PIPELINE] delta_scan out-of-core DuckDB indisponivel para '{normalized_path}' ({e}). "
+                f"Executando fallback controlado para DeltaTable."
+            )
+            dt = DeltaTable(table_full_path)
+            bronze_df = dt.to_pandas()
 
         return self.transform_dataframe(bronze_df, source_type=source_type, source_file=relative_table_path)

@@ -34,3 +34,7 @@ class DatasusValidator(BaseValidator):
         
         logger.info(f"Validation succeeded for {self.subsystem}. Valid records: {len(valid_df)}")
         return ValidationResult(valid_df, rejected_df, {"valid_count": len(valid_df), "rejected_count": len(rejected_df)})
+
+
+# Alias para retrocompatibilidade
+HealthDataValidator = DatasusValidator

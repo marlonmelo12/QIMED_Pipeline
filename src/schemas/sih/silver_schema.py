@@ -1,0 +1,17 @@
+MAPEAMENTO_SIH_SILVER = {
+    "N_AIH": "numero_aih",
+    "CNES": "codigo_estabelecimento_cnes",
+    "MUNIC_RES": "codigo_municipio_residencia_paciente",
+    "MUNIC_MOV": "codigo_municipio_hospital",
+    "NASC": "data_nascimento_paciente",
+    "SEXO": "sexo_biologico",
+    "DT_INTER": "data_internacao",
+    "DT_SAIDA": "data_alta",
+    "DIAG_PRINC": "codigo_cid10_principal",
+    "DIAG_SECUN": "codigo_cid10_secundario",
+    "DIAS_PERM": "dias_permanencia_real",
+    "MORTE": "indicador_obito",
+    "VAL_TOT": "valor_total_brl",
+    "VAL_UTI": "valor_uti_brl",
+    "PROC_REA": "codigo_procedimento_realizado",
+}

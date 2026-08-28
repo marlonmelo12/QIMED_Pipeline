@@ -1,6 +1,6 @@
 """
-Semantic Mapper for DATASUS CNES (Cadastro Nacional de Estabelecimentos de Saúde).
-Transforms CNES facility records into canonical Silver FHIR R4 Organization & Location entities.
+Mapper Semântico para o DATASUS CNES (Cadastro Nacional de Estabelecimentos de Saúde).
+Transforma registros de estabelecimentos de saúde no modelo canônico dim_organizations.
 """
 from datetime import datetime
 from typing import Dict, Any, Optional
@@ -15,14 +15,14 @@ logger = get_logger(__name__)
 
 class CnesSemanticMapper(BaseSemanticMapper):
     """
-    Transforms CNES health facility datasets into dim_organizations.
+    Transforma dados de estabelecimentos de saúde do CNES na dimensão dim_organizations.
     """
 
     def map_to_canonical(self, df: pd.DataFrame, source_metadata: Optional[Dict[str, Any]] = None) -> CanonicalDataset:
         if df.empty:
             return CanonicalDataset()
 
-        logger.info(f"Mapping {len(df)} CNES rows to canonical Organization model")
+        logger.info(f"Mapeando {len(df)} registros do CNES para o modelo canônico dim_organizations")
         src_meta = source_metadata or {}
         source_file = src_meta.get("source_file", "datasus_cnes")
 
@@ -66,5 +66,5 @@ class CnesSemanticMapper(BaseSemanticMapper):
             dim_organizations=dim_organizations,
             metadata={"source": "datasus_cnes", "row_count": len(df)}
         )
-        logger.info(f"Mapped {len(dim_organizations)} canonical organizations")
+        logger.info(f"Mapeadas {len(dim_organizations)} organizações canônicas")
         return canonical

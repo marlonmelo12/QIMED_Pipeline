@@ -14,11 +14,16 @@ x-airflow-common:
     - ./dags:/opt/qimed/dags
     - ./src:/opt/qimed/src
     - ./config:/opt/qimed/config
+    - ./tests:/opt/qimed/tests
     - ./lakehouse:/opt/qimed/lakehouse
+    - ./warehouse:/opt/qimed/warehouse
     - ./logs:/opt/airflow/logs
   depends_on:
     postgres:
       condition: service_healthy
+  dns:
+    - 8.8.8.8
+    - 1.1.1.1
   networks:
     - qimed-network
 
@@ -61,7 +66,7 @@ services:
     command: bash -c "rm -f /opt/airflow/airflow-webserver.pid /opt/airflow/airflow-webserver-monitor.pid; airflow webserver"
     restart: always
     ports:
-      - "8080:8080"
+      - "8088:8080"
     healthcheck:
       test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
       interval: 30s

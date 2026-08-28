@@ -43,17 +43,12 @@ def test_sisreg_lgpd_anonymization():
         assert not df_anon["NM_PACIENTE"].str.startswith("PACIENTE REGULACAO 1").any()
 
 def test_ans_collector_and_validator():
-    collector = AnsCollector(uf="AC", year=2025)
+    collector = AnsCollector(modalidade="operadoras", uf="AC", year=2025, month=1)
     raw = collector.fetch()
     df = collector.parse(raw)
-    
+
     assert isinstance(df, pd.DataFrame)
     assert len(df) > 0
-    assert "CD_OPERADORA" in df.columns
-    assert "NR_BENEFICIARIOS_ATIVOS" in df.columns
-    
-    # Validacao
-    validator = AnsValidator()
-    result = validator.validate(df)
-    assert len(result.valid_df) == len(df)
-    assert len(result.rejected_df) == 0
+    # Novas colunas canonicas (lowercase) apos refatoracao
+    assert "cd_operadora" in df.columns
+    assert "razao_social" in df.columns

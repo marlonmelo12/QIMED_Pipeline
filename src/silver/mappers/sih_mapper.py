@@ -1,10 +1,12 @@
 """
-Semantic Mapper for DATASUS SIH (Sistema de Informações Hospitalares - AIH).
-Transforms raw SIH hospitalization records into canonical Silver FHIR R4-aligned entities.
+Mapper Semântico para o DATASUS SIH (Sistema de Informações Hospitalares - AIH).
+Transforma registros brutos de internações hospitalares em entidades canônicas alinhadas ao FHIR R4.
 """
+import os
 import uuid
 import hashlib
 from datetime import datetime
+from decimal import Decimal, InvalidOperation
 from typing import Dict, Any, Optional
 import pandas as pd
 import numpy as np
@@ -17,7 +19,7 @@ logger = get_logger(__name__)
 
 
 def _parse_sih_date(val: Any) -> Optional[str]:
-    """Parse DATASUS YYYYMMDD date strings or timestamps into ISO-8601 (YYYY-MM-DD)."""
+    """Converte strings de datas no formato YYYYMMDD ou timestamps para ISO-8601 (YYYY-MM-DD)."""
     if pd.isna(val) or val is None or str(val).strip() in ("", "0", "00000000", "nan", "None"):
         return None
     val_str = str(val).split(".")[0].strip()
@@ -30,7 +32,7 @@ def _parse_sih_date(val: Any) -> Optional[str]:
 
 
 def _map_gender(val: Any) -> str:
-    """Normalize DATASUS sex codes (1/M -> male, 3/F/2 -> female, other -> unknown)."""
+    """Normaliza códigos de sexo do DATASUS (1/M -> male, 3/F/2 -> female, outro -> unknown)."""
     if pd.isna(val) or val is None:
         return "unknown"
     val_str = str(val).strip().upper()
@@ -42,10 +44,10 @@ def _map_gender(val: Any) -> str:
 
 
 def _map_encounter_class(car_int: Any) -> str:
-    """Map DATASUS CAR_INT (Caráter da Internação) to FHIR Encounter class code."""
+    """Mapeia o CAR_INT do DATASUS (Caráter da Internação) para o código de classe FHIR Encounter."""
     # 01: Eletivo, 02: Urgência/Emergência, 03: Acidente, 04: Parto, etc.
     if pd.isna(car_int) or car_int is None:
-        return "IMP"  # Inpatient by default for SIH
+        return "IMP"  # Internação hospitalar por padrão para o SIH
     val_str = str(car_int).strip()
     if val_str in ("02", "2", "03", "3"):
         return "EMER"
@@ -56,7 +58,7 @@ def _map_encounter_class(car_int: Any) -> str:
 
 class SihSemanticMapper(BaseSemanticMapper):
     """
-    Transforms SIH hospitalization records into:
+    Transforma registros de internações do SIH em:
     - dim_patients
     - fct_encounters
     - fct_conditions
@@ -67,7 +69,7 @@ class SihSemanticMapper(BaseSemanticMapper):
         if df.empty:
             return CanonicalDataset()
 
-        logger.info(f"Mapping {len(df)} SIH rows to canonical Silver model")
+        logger.info(f"Mapeando {len(df)} registros do SIH para o modelo canônico da Camada Silver")
         src_meta = source_metadata or {}
         source_file = src_meta.get("source_file", "datasus_sih")
 
@@ -77,29 +79,29 @@ class SihSemanticMapper(BaseSemanticMapper):
         procedures_list = []
 
         for idx, row in df.iterrows():
-            # 1. Identifiers
             raw_aih = str(row.get("N_AIH", "")).strip()
-            # If N_AIH is empty, generate deterministic hash from row values
+            # Se N_AIH estiver vazio, gera hash determinístico a partir dos atributos clínicos da linha
             if not raw_aih or raw_aih in ("nan", "None"):
-                raw_aih = f"sih_gen_{idx}_{uuid.uuid4().hex[:8]}"
+                key_payload = f"{row.get('CNES', '')}_{row.get('DT_INTER', '')}_{row.get('DT_SAIDA', '')}_{row.get('MUNIC_RES', '')}_{row.get('PROC_REA', '')}_{row.get('VAL_TOT', '')}"
+                stable_hash = hashlib.sha256(key_payload.encode()).hexdigest()[:16]
+                raw_aih = f"sih_gen_{stable_hash}"
 
             encounter_id = f"enc_sih_{raw_aih}"
 
-            # Patient Identifier resolution
-            # Use NASC or CPF_AUT or N_AIH to link
+            # Resolução de identificador de paciente (LGPD & MPI Canônico)
             raw_nasc = str(row.get("NASC", "")).strip()
-            raw_cpf = str(row.get("CPF_AUT", "")).strip()
             munic_res = str(row.get("MUNIC_RES", "")).strip()
+            raw_sexo = str(row.get("SEXO", "")).strip()
+            mpi_salt = os.environ.get("QIMED_MPI_SALT", "qimed_secret_mpi_salt_v3")
             
-            # Stable patient reference
-            if raw_cpf and raw_cpf not in ("nan", "None", ""):
-                patient_id = f"pat_{raw_cpf}"
-            elif raw_nasc and raw_nasc not in ("nan", "None", "") and len(raw_nasc) >= 8:
-                patient_id = f"pat_hash_{hashlib.sha256(f'{raw_nasc}_{munic_res}'.encode()).hexdigest()[:16]}"
+            # Referência estável do paciente sem expor dados do autorizador (CPF_AUT)
+            if raw_nasc and raw_nasc not in ("nan", "None", "") and len(raw_nasc) >= 8:
+                natural_key = f"{raw_nasc}|{munic_res}|{raw_sexo}"
+                patient_id = "pat_hash_" + hashlib.sha256(f"{natural_key}|{mpi_salt}".encode()).hexdigest()[:32]
             else:
                 patient_id = f"pat_sih_{raw_aih}"
 
-            # 2. Patient Demographics
+            # 2. Dados demográficos do paciente
             norm_ibge, ibge_meta = TerminologyService.normalize_ibge_municipality(munic_res)
             uf_abbr = ibge_meta.get("uf_abbreviation") if ibge_meta else None
             gender = _map_gender(row.get("SEXO", None))
@@ -114,7 +116,7 @@ class SihSemanticMapper(BaseSemanticMapper):
                 "_updated_at": datetime.utcnow().isoformat()
             })
 
-            # 3. Encounter
+            # 3. Encontro / Internação (Encounter)
             start_date = _parse_sih_date(row.get("DT_INTER"))
             end_date = _parse_sih_date(row.get("DT_SAIDA"))
             
@@ -128,21 +130,21 @@ class SihSemanticMapper(BaseSemanticMapper):
             proc_rea = str(row.get("PROC_REA", "")).strip()
             norm_sigtap, sigtap_meta = TerminologyService.normalize_sigtap(proc_rea)
 
-            # Length of stay
+            # Dias de permanência
             perm_days = row.get("DIAS_PERM", None)
             try:
                 length_of_stay = int(float(perm_days)) if pd.notna(perm_days) else None
             except Exception:
                 length_of_stay = None
 
-            # Financial Cost
+            # Custo financeiro (Decimal seguro)
             val_tot = row.get("VAL_TOT", None)
             try:
-                total_cost = float(str(val_tot).replace(",", ".")) if pd.notna(val_tot) else 0.0
-            except Exception:
-                total_cost = 0.0
+                total_cost = float(Decimal(str(val_tot).replace(",", "."))) if pd.notna(val_tot) and str(val_tot).strip() not in ("", "nan", "None") else None
+            except (InvalidOperation, TypeError, ValueError):
+                total_cost = None
 
-            # Outcome / Death
+            # Desfecho / Óbito
             morte = str(row.get("MORTE", "0")).strip()
             discharge_disposition = "expired" if morte in ("1", "true", "True") else "discharged_alive"
 
@@ -164,7 +166,7 @@ class SihSemanticMapper(BaseSemanticMapper):
                 "_updated_at": datetime.utcnow().isoformat()
             })
 
-            # 4. Conditions
+            # 4. Diagnósticos e Condições Clínicas (Conditions)
             if norm_cid:
                 conditions_list.append({
                     "condition_id": f"cond_{encounter_id}_pri",
@@ -195,7 +197,7 @@ class SihSemanticMapper(BaseSemanticMapper):
                     "_updated_at": datetime.utcnow().isoformat()
                 })
 
-            # 5. Procedures
+            # 5. Procedimentos Médicos (Procedures)
             if norm_sigtap:
                 procedures_list.append({
                     "procedure_id": f"proc_{encounter_id}_01",
@@ -223,5 +225,5 @@ class SihSemanticMapper(BaseSemanticMapper):
             fct_procedures=fct_procedures,
             metadata={"source": "datasus_sih", "row_count": len(df)}
         )
-        logger.info(f"Mapped canonical entities: {canonical.summary()}")
+        logger.info(f"Entidades canônicas mapeadas: {canonical.summary()}")
         return canonical

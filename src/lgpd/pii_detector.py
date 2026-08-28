@@ -1,3 +1,7 @@
+"""
+Detector de Dados Pessoais Sensíveis (PII / LGPD) para o QIMED DataQore.
+Identifica colunas com dados confidenciais baseando-se no manifesto de governança.
+"""
 import os
 import yaml
 from typing import List, Union, Dict, Any
@@ -11,17 +15,15 @@ logger = setup_logger(__name__)
 
 class PIIDetector:
     """
-    LGPD Gate component for detecting Personally Identifiable Information (PII)
-    based on a configurable manifest file.
+    Componente do Portal LGPD (LGPD Gate) para detecção de Informações Pessoais Identificáveis (PII)
+    com base em um manifesto de configuração YAML.
     """
 
     def __init__(self, manifest_path: str = None):
         """
-        Initialize the PIIDetector by loading the PII manifest.
+        Inicializa o PIIDetector carregando o manifesto de PII.
         """
         if not manifest_path:
-            # Default to config/pii_manifest.yaml relative to project root
-            # Assume we are running from project root or find it
             base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
             manifest_path = os.path.join(base_dir, "config", "pii_manifest.yaml")
         
@@ -30,34 +32,34 @@ class PIIDetector:
 
     def _load_manifest(self) -> Dict[str, List[str]]:
         """
-        Load the YAML manifest containing PII mappings.
+        Carrega o manifesto YAML contendo os mapeamentos de PII por subsistema.
         """
         if not os.path.exists(self.manifest_path):
-            logger.error(f"PII manifest not found at {self.manifest_path}")
+            logger.error(f"Manifesto PII não encontrado em {self.manifest_path}")
             return {}
 
         try:
             with open(self.manifest_path, 'r', encoding='utf-8') as f:
                 mappings = yaml.safe_load(f)
-                logger.info(f"Loaded PII manifest with {len(mappings)} source types.")
+                logger.info(f"Manifesto PII carregado com {len(mappings)} tipos de fonte.")
                 return mappings or {}
         except Exception as e:
-            logger.error(f"Failed to load PII manifest: {e}")
+            logger.error(f"Falha ao carregar manifesto PII: {e}")
             return {}
 
     def detect_pii_fields(self, source_type: str, data: Union[pd.DataFrame, pl.DataFrame, Dict[str, Any]]) -> List[str]:
         """
-        Identify which columns in the provided data contain PII based on the manifest.
+        Identifica quais colunas nos dados fornecidos contêm PII com base no manifesto.
         
-        Args:
-            source_type: The type of data source (e.g., 'datasus_sih').
-            data: The dataset (DataFrame or Dictionary).
+        Argumentos:
+            source_type: O tipo de fonte de dados (ex.: 'datasus_sih').
+            data: O conjunto de dados (DataFrame ou Dicionário).
             
-        Returns:
-            List of column/field names that contain PII.
+        Retorna:
+            Lista de nomes de colunas/campos que contêm dados sensíveis PII.
         """
         if source_type not in self.pii_mappings:
-            logger.warning(f"Source type '{source_type}' not found in PII manifest.")
+            logger.warning(f"Tipo de fonte '{source_type}' não encontrado no manifesto PII.")
             return []
 
         known_pii_fields = set(self.pii_mappings[source_type])
@@ -70,15 +72,15 @@ class PIIDetector:
         elif isinstance(data, dict):
             data_fields = set(data.keys())
         else:
-            logger.error(f"Unsupported data type for PII detection: {type(data)}")
+            logger.error(f"Tipo de dado não suportado para detecção de PII: {type(data)}")
             return []
 
-        # Find intersection
+        # Interseção de campos presentes
         detected_fields = list(known_pii_fields.intersection(data_fields))
         
         if detected_fields:
-            logger.info(f"Detected PII fields for {source_type}: {detected_fields}")
+            logger.info(f"Campos PII detectados para {source_type}: {detected_fields}")
         else:
-            logger.info(f"No PII fields detected for {source_type}.")
+            logger.info(f"Nenhum campo PII detectado para {source_type}.")
             
         return detected_fields

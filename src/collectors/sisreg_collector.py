@@ -51,6 +51,7 @@ class SisregCollector(BaseCollector):
                 "DT_NASC": "19800510",
                 "SEXO": "M",
                 "CO_MUNICIPIO_IBGE": "120020", # Cruzeiro do Sul
+                "NO_MUNICIPIO_SOLICITANTE": "Cruzeiro do Sul",
                 "DT_SOLICITACAO": "2025-01-02 08:30:00",
                 "DT_AUTORIZACAO": "2025-01-04 14:15:00",
                 "TIPO_VAGA": "LEITO_UTI_ADULTO",
@@ -70,6 +71,7 @@ class SisregCollector(BaseCollector):
                 "DT_NASC": "19650822",
                 "SEXO": "F",
                 "CO_MUNICIPIO_IBGE": "120040", # Rio Branco
+                "NO_MUNICIPIO_SOLICITANTE": "Rio Branco",
                 "DT_SOLICITACAO": "2025-01-05 10:00:00",
                 "DT_AUTORIZACAO": "2025-01-12 11:30:00",
                 "TIPO_VAGA": "CONSULTA_ONCOLOGIA",
@@ -89,6 +91,7 @@ class SisregCollector(BaseCollector):
                 "DT_NASC": "19921130",
                 "SEXO": "M",
                 "CO_MUNICIPIO_IBGE": "120010", # Brasiléia
+                "NO_MUNICIPIO_SOLICITANTE": "Brasiléia",
                 "DT_SOLICITACAO": "2025-01-10 14:00:00",
                 "DT_AUTORIZACAO": "2025-01-11 09:00:00",
                 "TIPO_VAGA": "LEITO_CIRURGICO",
@@ -108,6 +111,7 @@ class SisregCollector(BaseCollector):
                 "DT_NASC": "19580415",
                 "SEXO": "F",
                 "CO_MUNICIPIO_IBGE": "120060", # Tarauacá
+                "NO_MUNICIPIO_SOLICITANTE": "Tarauacá",
                 "DT_SOLICITACAO": "2025-01-15 16:20:00",
                 "DT_AUTORIZACAO": None,
                 "TIPO_VAGA": "EXAME_RESSONANCIA",

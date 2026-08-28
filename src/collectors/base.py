@@ -1,3 +1,7 @@
+"""
+Classe base abstrata para coletores de dados do QIMED.
+Implementa lógica de tentativas (retry), checkpointing e circuit breaker.
+"""
 import abc
 import os
 import time
@@ -13,13 +17,13 @@ logger = get_logger(__name__)
 
 
 class CircuitBreakerOpen(Exception):
-    """Raised when the circuit breaker is open due to consecutive failures."""
+    """Lançada quando o circuit breaker está aberto devido a falhas consecutivas."""
     pass
 
 
 @dataclass
 class CollectorConfig:
-    """Configuration for a data collector."""
+    """Configuração para um coletor de dados."""
     max_retries: int = 3
     retry_backoff: int = 5
     state_dir: str = ".collector_state"
@@ -27,11 +31,11 @@ class CollectorConfig:
 
 class BaseCollector(abc.ABC):
     """
-    Abstract base collector with retry logic, checkpointing, and circuit breaker.
+    Coletor base abstrato com lógica de repetição, checkpoint e disjuntor de circuito (circuit breaker).
 
-    Subclasses implement fetch(), parse(), and get_source_type().
-    The run() method orchestrates the full pipeline:
-        fetch → parse → PII detect → anonymize → validate → write bronze → register catalog
+    As subclasses implementam fetch(), parse() e get_source_type().
+    O método run() orquestra o fluxo completo:
+        fetch → parse → detecção PII → anonimização → validação → escrita na bronze → registro no catálogo
     """
 
     def __init__(self, config: CollectorConfig = None):
@@ -40,31 +44,31 @@ class BaseCollector(abc.ABC):
 
     @abc.abstractmethod
     def fetch(self) -> Any:
-        """Fetch raw data from the source. Returns raw data (list, bytes, etc.)."""
+        """Coleta dados brutos da fonte. Retorna dados brutos (lista, bytes, etc.)."""
         pass
 
     @abc.abstractmethod
     def parse(self, raw_data: Any) -> pd.DataFrame:
-        """Parse raw data into a pandas DataFrame."""
+        """Converte e estrutura os dados brutos em um DataFrame do pandas."""
         pass
 
     @abc.abstractmethod
     def get_source_type(self) -> str:
-        """Return the source type identifier (e.g., 'datasus_sih')."""
+        """Retorna o identificador do tipo de fonte (ex.: 'datasus_sih')."""
         pass
 
     def save_checkpoint(self, state: Dict[str, Any]) -> None:
-        """Save checkpoint state to disk for resumable ingestion."""
+        """Salva o estado do checkpoint em disco para permitir ingestão retomável."""
         os.makedirs(self.config.state_dir, exist_ok=True)
         state_file = os.path.join(
             self.config.state_dir, f"{self.get_source_type()}_state.json"
         )
         with open(state_file, "w", encoding="utf-8") as f:
             json.dump(state, f, indent=2, default=str)
-        logger.info(f"Checkpoint saved: {state_file}")
+        logger.info(f"Checkpoint salvo: {state_file}")
 
     def load_checkpoint(self) -> Optional[Dict[str, Any]]:
-        """Load checkpoint state from disk, if it exists."""
+        """Carrega o estado do checkpoint do disco, se existir."""
         state_file = os.path.join(
             self.config.state_dir, f"{self.get_source_type()}_state.json"
         )
@@ -82,47 +86,47 @@ class BaseCollector(abc.ABC):
         catalog=None,
     ) -> pd.DataFrame:
         """
-        Execute the full ingestion pipeline with retry and circuit breaker.
+        Executa o pipeline completo de ingestão com retentativas e circuit breaker.
 
-        All dependencies are injected to keep the base class testable.
+        Todas as dependências são injetadas para manter a classe base testável.
         """
         if self.consecutive_failures >= self.config.max_retries:
             raise CircuitBreakerOpen(
-                f"Circuit breaker open after {self.consecutive_failures} consecutive failures."
+                f"Circuit breaker aberto após {self.consecutive_failures} falhas consecutivas."
             )
 
         attempt = 0
         while attempt < self.config.max_retries:
             try:
-                logger.info(f"[{self.get_source_type()}] Attempt {attempt + 1}/{self.config.max_retries}")
+                logger.info(f"[{self.get_source_type()}] Tentativa {attempt + 1}/{self.config.max_retries}")
 
-                # 1. Fetch
+                # 1. Coleta
                 raw_data = self.fetch()
 
-                # 2. Parse
+                # 2. Parsing
                 df = self.parse(raw_data)
-                logger.info(f"Parsed {len(df)} rows")
+                logger.info(f"Registros parseados: {len(df)}")
 
-                # 3. Detect PII & Anonymize
+                # 3. Detecção de PII e Anonimização
                 if pii_detector and anonymizer:
                     pii_fields = pii_detector.detect_pii_fields(
                         self.get_source_type(), df
                     )
                     if pii_fields:
-                        logger.info(f"PII detected in columns: {pii_fields}")
+                        logger.info(f"Campos PII detectados nas colunas: {pii_fields}")
                         df, audit_log = anonymizer.anonymize(df, pii_fields)
-                        logger.info(f"Anonymization audit: {audit_log}")
+                        logger.info(f"Auditoria de anonimização: {audit_log}")
 
-                # 4. Validate
+                # 4. Validação
                 if validator:
                     result = validator.validate(df)
                     if not result.rejected_df.empty:
                         logger.warning(
-                            f"Validation rejected {len(result.rejected_df)} rows."
+                            f"Validação rejeitou {len(result.rejected_df)} linhas."
                         )
                     df = result.valid_df
 
-                # 5. Write to Bronze
+                # 5. Escrita na Camada Bronze
                 if bronze_writer:
                     metadata = {
                         "source": self.get_source_type().split("_")[0],
@@ -131,9 +135,9 @@ class BaseCollector(abc.ABC):
                         "source_file": "collector_run",
                     }
                     write_stats = bronze_writer.write(df, metadata)
-                    logger.info(f"Bronze write stats: {write_stats}")
+                    logger.info(f"Estatísticas de gravação Bronze: {write_stats}")
 
-                # 6. Register in catalog
+                # 6. Registro no Catálogo de Metadados
                 if catalog:
                     catalog.register_dataset(
                         source_type=self.get_source_type(),
@@ -151,7 +155,7 @@ class BaseCollector(abc.ABC):
             except Exception as e:
                 attempt += 1
                 self.consecutive_failures += 1
-                logger.error(f"Attempt {attempt} failed: {e}")
+                logger.error(f"Tentativa {attempt} falhou: {e}")
                 if attempt >= self.config.max_retries:
                     raise
                 time.sleep(self.config.retry_backoff * attempt)

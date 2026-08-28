@@ -1,4 +1,9 @@
-# Python
+# ==============================================================================
+# QIMED Health Lakehouse - Production .gitignore
+# Exclui arquivos temporários, logs, segredos e dados de execução do repositório.
+# ==============================================================================
+
+# --- 1. Python & Ambientes Virtuais ---
 __pycache__/
 *.py[cod]
 *$py.class
@@ -7,6 +12,7 @@ __pycache__/
 env/
 venv/
 .venv/
+ENV/
 build/
 develop-eggs/
 dist/
@@ -23,39 +29,70 @@ wheels/
 .installed.cfg
 *.egg
 
-# Pytest & Coverage
+# --- 2. Testes, Qualidade de Código & Cobertura ---
 .pytest_cache/
 .coverage
+.coverage.*
 htmlcov/
+.mypy_cache/
+.ruff_cache/
 
-# Airflow & Logs
+# --- 3. Airflow, Logs & PIDs ---
 logs/
 *.log
+*.pid
 airflow-webserver.pid
 airflow-webserver-monitor.pid
+airflow.db
+standalone_admin_password.txt
 
-# Local Data Lakehouse & State
+# --- 4. Armazenamento Lakehouse & Bases Locais ---
 lakehouse/
 .collector_state/
 _metadata/
 temp/
-*.dbc
-*.dbf
-
-# Data Science Exports & Notebooks (Mantidos fora do repositorio)
+tmp/
+scratch/
 exports/
 notebooks/
+
+# Formatos brutos e temporários de saúde
+*.dbc
+*.dbf
 *.db
 *.sqlite
 *.sqlite3
 
-# Environment Variables & Secrets
-.env
+# DuckDB Warehouse (binários gerados por execução)
+warehouse/*.duckdb
+warehouse/*.duckdb.wal
+warehouse/*.tmp
+*.duckdb
+*.duckdb.wal
 
-# IDEs & OS
+# Parquets gerados (Preserva tabelas de domínio estáticas em config/)
+*.parquet
+!config/*.parquet
+
+# Telemetria e relatórios gerados em tempo de execução
+pipeline_progress.json
+latest_quality_audit.json
+catalog.json
+
+# --- 5. Variáveis de Ambiente & Segredos ---
+.env
+.env.*
+.env.local
+!.env.example
+*.pem
+*.key
+
+# --- 6. IDEs & Sistema Operacional ---
 .idea/
 .vscode/
 *.swp
 *.swo
+*~
 .DS_Store
 Thumbs.db
+desktop.ini

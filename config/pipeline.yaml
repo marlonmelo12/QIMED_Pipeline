@@ -1,0 +1,58 @@
+pipeline:
+  name: "QIMED Health Lakehouse"
+  version: "3.0.0"
+  target_competency:
+    year: 2026
+    month: 5
+
+paths:
+  lakehouse_root: "lakehouse"
+  warehouse_root: "warehouse"
+  cache_dir: "lakehouse/cache/datasus"
+  staging_dir: "lakehouse/staging"
+  system_dir: "lakehouse/system"
+  bronze_dir: "lakehouse/bronze"
+  silver_dir: "lakehouse/silver"
+  gold_dw_file: "warehouse/qimed_dw.duckdb"
+  temp_duckdb_dir: "lakehouse/temp_duckdb"
+
+parser:
+  chunk_rows: 100000
+  queue_max_size: 3
+  encoding: "iso-8859-1"
+  min_file_size_bytes: 1024
+
+staging:
+  compression: "snappy"
+  max_staged_batches_before_compact: 10
+
+delta:
+  target_commit_rows: 2000000
+  compaction_strategy: "cardinality_based"
+  schema_evolution: "strict_validated"
+  write_mode: "replace_partition"
+
+duckdb:
+  memory_limit: "8GB"
+  threads: 8
+  enable_progress_bar: false
+
+compaction:
+  cardinality_thresholds:
+    small_uf_max_files: 1
+    medium_uf_max_files: 4
+    large_uf_max_files: 10
+  small_uf_list: ["AC", "AP", "RR", "RO", "TO", "SE", "AL", "PI", "RN", "PB", "MS", "MT", "DF"]
+  medium_uf_list: ["AM", "PA", "MA", "CE", "PE", "BA", "ES", "GO", "PR", "SC", "RS", "MG", "RJ"]
+  large_uf_list: ["SP"]
+
+mpi:
+  salt_secret_env: "QIMED_MPI_SALT"
+  # Sem default_salt: o pipeline falha explicitamente se QIMED_MPI_SALT nao estiver configurado.
+  # Gerar um salt seguro: openssl rand -hex 32
+  hash_algorithm: "sha256"
+
+observability:
+  enable_psutil_metrics: true
+  metrics_interval_sec: 5
+  log_level: "INFO"

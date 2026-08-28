@@ -1,5 +1,5 @@
 """
-Unit tests for Silver semantic mappers (SIH, CNES, FHIR) and EntityResolver.
+Testes unitários para os mappers semânticos da Camada Silver (SIH, CNES, FHIR) e EntityResolver.
 """
 import pytest
 import pandas as pd
@@ -11,10 +11,10 @@ from src.silver.entity_resolver import EntityResolver
 
 
 class TestSilverMappers:
-    """Tests for mapping raw and semi-structured health datasets to Silver."""
+    """Testes para mapeamento de dados brutos e semiestruturados de saúde para a Camada Silver."""
 
     def test_sih_mapper(self, sample_sih_df):
-        """SIH mapper should extract patients, encounters, conditions, and procedures."""
+        """O mapper do SIH deve extrair pacientes, encontros/internações, condições e procedimentos."""
         mapper = SihSemanticMapper()
         canonical = mapper.map_to_canonical(sample_sih_df)
 
@@ -23,7 +23,7 @@ class TestSilverMappers:
         assert len(canonical.fct_conditions) >= len(sample_sih_df)
         assert len(canonical.fct_procedures) == len(sample_sih_df)
 
-        # Check column presence
+        # Verificação de colunas esperadas
         assert "patient_id" in canonical.dim_patients.columns
         assert "state" in canonical.dim_patients.columns
         assert "total_cost_brl" in canonical.fct_encounters.columns
@@ -32,7 +32,7 @@ class TestSilverMappers:
         assert "group_description" in canonical.fct_procedures.columns
 
     def test_cnes_mapper(self, sample_cnes_df):
-        """CNES mapper should extract organizations with clean CNES codes."""
+        """O mapper do CNES deve extrair estabelecimentos de saúde com códigos de 7 dígitos."""
         mapper = CnesSemanticMapper()
         canonical = mapper.map_to_canonical(sample_cnes_df)
 
@@ -43,7 +43,7 @@ class TestSilverMappers:
         assert canonical.dim_organizations["cnes_code"].iloc[0] == "1234567"
 
     def test_fhir_mapper(self):
-        """FHIR mapper should normalize heterogeneous bundle rows."""
+        """O mapper FHIR deve normalizar linhas heterogêneas de bundles."""
         raw_fhir_df = pd.DataFrame([
             {
                 "resourceType": "Patient",
@@ -83,12 +83,12 @@ class TestSilverMappers:
         assert len(canonical.fct_conditions) == 1
         assert len(canonical.fct_procedures) == 1
 
-        # Check references
+        # Verificação de integridade referencial
         assert canonical.fct_encounters["patient_id"].iloc[0] == "pat_fhir_p1"
         assert canonical.fct_encounters["organization_id"].iloc[0] == "org_fhir_org1"
 
     def test_entity_resolver_mpi(self, sample_sih_df):
-        """EntityResolver should enrich canonical dataset with patient_master_id."""
+        """O EntityResolver deve enriquecer o dataset canônico com patient_master_id."""
         mapper = SihSemanticMapper()
         canonical = mapper.map_to_canonical(sample_sih_df)
 
@@ -100,5 +100,29 @@ class TestSilverMappers:
         assert "patient_master_id" in resolved.fct_conditions.columns
         assert "patient_master_id" in resolved.fct_procedures.columns
 
-        # Verify MPI prefix
+        # Verifica prefixo do MPI
         assert resolved.dim_patients["patient_master_id"].iloc[0].startswith("mpi_")
+
+    def test_sih_mapper_deterministic_fallback_keys(self):
+        """Reprocessamento sem N_AIH deve gerar os mesmos encounter_id de forma determinística."""
+        df_no_aih = pd.DataFrame([{
+            "N_AIH": None,
+            "CNES": "2000733",
+            "DT_INTER": "2026-05-01",
+            "DT_SAIDA": "2026-05-05",
+            "MUNIC_RES": "120040",
+            "PROC_REA": "0303010037",
+            "VAL_TOT": "1500.50",
+            "SEXO": "1",
+            "DIAG_PRINC": "I10",
+        }])
+
+        mapper = SihSemanticMapper()
+        res1 = mapper.map_to_canonical(df_no_aih)
+        res2 = mapper.map_to_canonical(df_no_aih)
+
+        enc1 = res1.fct_encounters["encounter_id"].iloc[0]
+        enc2 = res2.fct_encounters["encounter_id"].iloc[0]
+
+        assert enc1 == enc2
+        assert enc1.startswith("enc_sih_sih_gen_")

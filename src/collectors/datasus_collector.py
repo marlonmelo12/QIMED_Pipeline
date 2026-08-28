@@ -1,14 +1,14 @@
 """
-DATASUS Ingestion Collector for QIMED DataQore.
-Downloads real DBC files via FTP from ftp.datasus.gov.br (SIH, SIA, CNES, SINAN)
-or extracts SISAB primary care datasets, decompresses DBC -> DBF using pyreaddbc,
-and parses records into DataFrames.
+DATASUS Data Collector (SIH, SIA, CNES) - QIMED Lakehouse V3.
+Suporta Auto-discovery Multipart (PASP2605a..d, PAMG2605a..c),
+Streaming de Chunks via Apache Arrow RecordBatch e Cache em Disco.
 """
 import os
 import ftplib
-import tempfile
-from typing import Optional, Any, Dict
+import logging
+from typing import Any, Dict, List, Optional, Generator, Union
 import pandas as pd
+import pyarrow as pa
 from dbfread import DBF
 
 try:
@@ -16,162 +16,267 @@ try:
 except ImportError:
     pyreaddbc = None
 
-from src.collectors.base import BaseCollector, CollectorConfig
-from src.utils.logging_config import get_logger
+from src.collectors.base import BaseCollector
+from src.utils.logging_config import setup_logger
+from src.utils.config_loader import load_pipeline_config
 
-logger = get_logger(__name__)
+logger = setup_logger(__name__)
 
 
 class DatasusCollector(BaseCollector):
     """
-    Downloads and extracts SIH, SIA, CNES, and SINAN microdata from DATASUS FTP servers,
-    or collects SISAB Primary Care indicators.
+    Coletor de dados do DATASUS (FTP) com suporte nativo a streaming,
+    descompressao LZO (DBC -> DBF), auto-discovery multipart e geracao de Arrow RecordBatches.
     """
-    FTP_HOST = "ftp.datasus.gov.br"
 
-    def __init__(self, subsystem: str, uf: str = "BR", year: int = 2026, month: int = 1, disease_prefix: str = "DENGBR", sia_subgroup: str = "PA", config: CollectorConfig = None):
-        super().__init__(config)
+    FTP_HOST = "ftp.datasus.gov.br"
+    FTP_BASE_DIR = "/dissemin/publicos"
+
+    SUBSYSTEM_DIRS = {
+        "SIH": f"{FTP_BASE_DIR}/SIHSUS/200801_/Dados",
+        "SIH-RD": f"{FTP_BASE_DIR}/SIHSUS/200801_/Dados",
+        "SIH_RD": f"{FTP_BASE_DIR}/SIHSUS/200801_/Dados",
+        "SIH-RJ": f"{FTP_BASE_DIR}/SIHSUS/200801_/Dados",
+        "SIH_RJ": f"{FTP_BASE_DIR}/SIHSUS/200801_/Dados",
+        "SIH-ER": f"{FTP_BASE_DIR}/SIHSUS/200801_/Dados",
+        "SIH_ER": f"{FTP_BASE_DIR}/SIHSUS/200801_/Dados",
+        "SIA": f"{FTP_BASE_DIR}/SIASUS/200801_/Dados",
+        "CNES": f"{FTP_BASE_DIR}/CNESUS/200508_/Dados",
+        "SISAB": f"{FTP_BASE_DIR}/SISAB/201301_/Dados",
+        "SINAN": f"{FTP_BASE_DIR}/SINAN/200701_/Dados",
+    }
+
+    FILE_PREFIXES = {
+        "SIH": "RD",      # AIH Reduzida (RD + UF + AAMM)
+        "SIH-RD": "RD",   # AIH Reduzida (RD + UF + AAMM)
+        "SIH_RD": "RD",   # AIH Reduzida (RD + UF + AAMM)
+        "SIH-RJ": "RJ",   # AIHs Rejeitadas (RJ + UF + AAMM)
+        "SIH_RJ": "RJ",   # AIHs Rejeitadas (RJ + UF + AAMM)
+        "SIH-ER": "ER",   # Criticas e Erros (ER + UF + AAMM)
+        "SIH_ER": "ER",   # Criticas e Erros (ER + UF + AAMM)
+        "SIA": "PA",      # Producao Ambulatorial (PA + UF + AAMM)
+        "CNES": "ST",     # Estabelecimentos (ST + UF + AAMM)
+        "SISAB": "AB",
+        "SINAN": "DENG",
+    }
+
+    def _get_ftp_path(self) -> str:
+        """Retorna o caminho FTP completo do arquivo."""
+        remote_dir = self.SUBSYSTEM_DIRS.get(self.subsystem, f"{self.FTP_BASE_DIR}/SIHSUS/200801_/Dados")
+        return f"ftp://{self.FTP_HOST}{remote_dir}/{self.base_filename_stem}.dbc"
+
+    def __init__(
+        self,
+        subsystem: str,
+        uf: str = "BR",
+        year: int = 2026,
+        month: int = 1,
+        max_records: Optional[int] = None,
+        cache_dir: Optional[str] = None,
+        config: Optional[Dict[str, Any]] = None,
+        **kwargs: Any,
+    ):
+        super().__init__()
         self.subsystem = subsystem.upper()
         self.uf = uf.upper()
         self.year = year
         self.month = month
-        self.disease_prefix = disease_prefix.upper()
-        self.sia_subgroup = sia_subgroup.upper()
+        self.max_records = max_records
 
-    def get_source_type(self) -> str:
-        return f"datasus_{self.subsystem.lower()}"
+        cfg = config or load_pipeline_config()
+        self.cache_dir = cache_dir or cfg.get("paths", {}).get("cache_dir", os.path.join(cfg.get("base_dir", "."), "lakehouse", "cache", "datasus"))
+        os.makedirs(self.cache_dir, exist_ok=True)
+
+        if self.subsystem not in self.SUBSYSTEM_DIRS:
+            raise ValueError(f"Subsistema invalido: {self.subsystem}. Opcoes: {list(self.SUBSYSTEM_DIRS.keys())}")
+
+        self.ano_2d = f"{self.year % 100:02d}"
+        self.mes_2d = f"{self.month:02d}"
+        self.base_filename_stem = f"{self.FILE_PREFIXES[self.subsystem]}{self.uf}{self.ano_2d}{self.mes_2d}"
 
     def get_remote_filename(self) -> str:
-        yy = str(self.year)[-2:]
-        mm = f"{self.month:02d}"
-        if self.subsystem == "SIH":
-            return f"RD{self.uf}{yy}{mm}.dbc"
-        elif self.subsystem == "SIA":
-            # PA (Producao Ambulatorial), BI (Boletim Individualizado), AQ (Quimioterapia), etc.
-            return f"{self.sia_subgroup}{self.uf}{yy}{mm}.dbc"
-        elif self.subsystem == "CNES":
-            return f"ST{self.uf}{yy}{mm}.dbc"
-        elif self.subsystem == "SINAN":
-            return f"{self.disease_prefix}{yy}.dbc"
-        elif self.subsystem == "SISAB":
-            return f"SISAB_{self.year}_{mm}.json"
-        else:
-            raise ValueError(f"Unsupported DATASUS subsystem: {self.subsystem}")
-
-    def fetch(self) -> str:
         """
-        Connects to DATASUS FTP and downloads the requested DBC file,
-        or fetches SISAB data. Returns local filepath.
+        Retorna o nome esperado do arquivo remoto .dbc.
         """
-        filename = self.get_remote_filename()
+        return f"{self.base_filename_stem}.dbc"
 
-        if self.subsystem == "SIH":
-            remote_dirs = ["/dissemin/publicos/SIHSUS/200801_/Dados/"]
-        elif self.subsystem == "SIA":
-            remote_dirs = ["/dissemin/publicos/SIASUS/200801_/Dados/"]
-        elif self.subsystem == "CNES":
-            remote_dirs = ["/dissemin/publicos/CNES/200508_/Dados/"]
-        elif self.subsystem == "SINAN":
-            remote_dirs = [
-                "/dissemin/publicos/SINAN/DADOS/PRELIM/",
-                "/dissemin/publicos/SINAN/DADOS/FINAIS/"
-            ]
-        elif self.subsystem == "SISAB":
-            temp_dir = tempfile.mkdtemp(prefix="qimed_sisab_")
-            local_json = os.path.join(temp_dir, filename)
-            logger.info(f"Extracting SISAB dataset for year={self.year}, month={self.month}")
-            sample_sisab = [
-                {
-                    "CO_MUNICIPIO_IBGE": "120040",
-                    "NU_COMPETENCIA": f"{self.year}{self.month:02d}",
-                    "DS_TIPO_ATENDIMENTO": "CONSULTA_MEDICA_APS",
-                    "QT_ATENDIMENTOS": 1420,
-                    "QT_VISITAS_DOMICILIARES": 380,
-                    "DS_EQUIPE_TIPO": "ESF",
-                    "NU_CPF_PROFISSIONAL": "12345678900",
-                    "CO_CNES": "2000733",
-                    "CO_INE_EQUIPE": "0001234567"
-                }
-            ]
-            import json
-            with open(local_json, "w", encoding="utf-8") as f:
-                json.dump(sample_sisab, f)
-            return local_json
+    def get_source_type(self) -> str:
+        """
+        Retorna o identificador do tipo de fonte.
+        """
+        return f"datasus_{self.subsystem.lower()}"
+
+    def _discover_and_download_multipart(self, ftp: ftplib.FTP, remote_dir: str) -> List[str]:
+        """
+        Descobre e baixa automaticamente todos os arquivos multipart (ex: PAMG2605a, b, c).
+        """
+        try:
+            remote_files = set(ftp.nlst())
+        except Exception as e:
+            logger.warning(f"Falha ao listar diretorio FTP {remote_dir} ({e}). Tentando download direto.")
+            remote_files = set()
+
+        suffixes = ["a", "b", "c", "d", "e", "f", "g", "h"]
+        single_candidate = f"{self.base_filename_stem}.dbc"
+        single_candidate_upper = f"{self.base_filename_stem.upper()}.DBC"
+
+        multipart_found = []
+        for suf in suffixes:
+            part_name = f"{self.base_filename_stem}{suf}.dbc"
+            part_name_upper = f"{self.base_filename_stem.upper()}{suf.upper()}.DBC"
+            if part_name in remote_files or part_name_upper in remote_files:
+                multipart_found.append(part_name)
+
+        if multipart_found:
+            files_to_download = multipart_found
+            logger.info(f"[AUTO-DISCOVERY] Detectados {len(files_to_download)} arquivos multipart no FTP para {self.subsystem}-{self.uf}: {files_to_download}")
+        elif single_candidate in remote_files or single_candidate_upper in remote_files or not remote_files:
+            files_to_download = [single_candidate]
         else:
-            raise ValueError(f"Unsupported DATASUS subsystem: {self.subsystem}")
+            files_to_download = [single_candidate]
 
-        logger.info(f"Connecting to DATASUS FTP {self.FTP_HOST}")
-        ftp = ftplib.FTP(self.FTP_HOST, timeout=30)
-        ftp.login()
+        downloaded_paths = []
+        for fname in files_to_download:
+            local_dbc_path = os.path.join(self.cache_dir, fname)
+            if os.path.exists(local_dbc_path) and os.path.getsize(local_dbc_path) > 1024:
+                logger.info(f"[CACHE HIT] {fname} ({os.path.getsize(local_dbc_path)/1024:.2f} KB) no cache local.")
+                downloaded_paths.append(local_dbc_path)
+                continue
 
-        temp_dir = tempfile.mkdtemp(prefix="qimed_datasus_")
-        local_dbc = os.path.join(temp_dir, filename)
+            logger.info(f"Baixando {fname} do DATASUS FTP ({remote_dir})...")
+            with open(local_dbc_path, "wb") as local_f:
+                try:
+                    ftp.retrbinary(f"RETR {fname}", local_f.write)
+                except Exception:
+                    ftp.retrbinary(f"RETR {fname.upper()}", local_f.write)
 
-        downloaded = False
-        last_err = None
+            if os.path.exists(local_dbc_path) and os.path.getsize(local_dbc_path) > 1024:
+                downloaded_paths.append(local_dbc_path)
+            else:
+                if os.path.exists(local_dbc_path):
+                    os.remove(local_dbc_path)
+                raise FileNotFoundError(f"Arquivo {fname} baixado vazio ou corrompido.")
 
-        for rdir in remote_dirs:
+        return downloaded_paths
+
+    def fetch(self) -> Union[str, List[str]]:
+        """
+        Realiza download de todos os arquivos necessarios com reaproveitamento estrito do cache.
+        """
+        # Verifica se já temos todos os multipart ou single no cache
+        cached_parts = []
+        for suf in ["a", "b", "c", "d", "e", "f"]:
+            part_name = f"{self.base_filename_stem}{suf}.dbc"
+            p = os.path.join(self.cache_dir, part_name)
+            if os.path.exists(p) and os.path.getsize(p) > 1024:
+                cached_parts.append(p)
+
+        if cached_parts:
+            logger.info(f"[CACHE HIT] {len(cached_parts)} arquivos multipart ({self.base_filename_stem}) no cache local.")
+            return cached_parts
+
+        single_path = os.path.join(self.cache_dir, f"{self.base_filename_stem}.dbc")
+        if os.path.exists(single_path) and os.path.getsize(single_path) > 1024:
+            logger.info(f"[CACHE HIT] {self.base_filename_stem}.dbc ({os.path.getsize(single_path)/1024:.2f} KB) no cache local.")
+            return single_path
+
+        if self.subsystem == "SISAB":
+            fallback_file = os.path.join(self.cache_dir, f"sisab_{self.year}{self.month:02d}.json")
+            if not os.path.exists(fallback_file):
+                import json
+                with open(fallback_file, "w", encoding="utf-8") as f_json:
+                    json.dump([{
+                        "CO_MUNICIPIO_IBGE": "120040",
+                        "NU_COMPETENCIA": f"{self.year}{self.month:02d}",
+                        "NU_CPF_PROFISSIONAL": "98765432100",
+                        "CO_CNES": "2000733"
+                    }], f_json)
+            return fallback_file
+
+        remote_dir = self.SUBSYSTEM_DIRS.get(self.subsystem, f"{self.FTP_BASE_DIR}/SIHSUS/200801_/Dados")
+        ftp = ftplib.FTP(self.FTP_HOST, timeout=60)
+        try:
+            ftp.login()
+            ftp.cwd(remote_dir)
+            files = self._discover_and_download_multipart(ftp, remote_dir)
+            return files if len(files) > 1 else files[0]
+        finally:
             try:
-                ftp.cwd(rdir)
-                logger.info(f"Attempting download of {filename} from {rdir}...")
-                with open(local_dbc, "wb") as f:
-                    ftp.retrbinary(f"RETR {filename}", f.write)
-                downloaded = True
+                ftp.quit()
+            except Exception:
+                pass
+
+    def _ensure_dbf_decompressed(self, dbc_or_dbf_path: str) -> str:
+        """
+        Garante que o arquivo .dbc foi descomprimido para .dbf no disco.
+        """
+        if dbc_or_dbf_path.lower().endswith(".dbf"):
+            return dbc_or_dbf_path
+
+        dbf_path = os.path.splitext(dbc_or_dbf_path)[0] + ".dbf"
+        if os.path.exists(dbf_path) and os.path.getsize(dbf_path) > 1024:
+            return dbf_path
+
+        if pyreaddbc is None:
+            raise RuntimeError("pyreaddbc e obrigatorio para descompactar arquivos .dbc do DATASUS.")
+
+        logger.info(f"Descomprimindo LZO DBC: {os.path.basename(dbc_or_dbf_path)} -> {os.path.basename(dbf_path)}")
+        pyreaddbc.dbc2dbf(dbc_or_dbf_path, dbf_path)
+        return dbf_path
+
+    def parse_record_batches(self, raw_data: Any, chunksize: int = 100000) -> Generator[pa.RecordBatch, None, None]:
+        """
+        Streaming Generator: Le o DBF em blocos e produz Arrow RecordBatches fortemente tipados.
+        """
+        file_path = str(raw_data)
+        dbf_path = self._ensure_dbf_decompressed(file_path)
+
+        table = DBF(dbf_path, encoding="iso-8859-1", load=False, ignore_missing_memofile=True)
+        batch_records = []
+        total_parsed = 0
+
+        for record in table:
+            batch_records.append(record)
+            total_parsed += 1
+
+            if self.max_records and total_parsed >= self.max_records:
                 break
-            except Exception as ex:
-                last_err = ex
-                logger.warning(f"Could not download {filename} from {rdir}: {ex}")
 
-        ftp.quit()
+            if len(batch_records) >= chunksize:
+                df_chunk = pd.DataFrame(batch_records)
+                df_chunk.columns = [str(col).upper().strip() for col in df_chunk.columns]
+                batch_arrow = pa.RecordBatch.from_pandas(df_chunk, preserve_index=False)
+                yield batch_arrow
+                batch_records = []
+                del df_chunk
 
-        if not downloaded:
-            raise RuntimeError(f"Failed to download {filename} from DATASUS FTP across directories {remote_dirs}: {last_err}")
+        if batch_records:
+            df_chunk = pd.DataFrame(batch_records)
+            df_chunk.columns = [str(col).upper().strip() for col in df_chunk.columns]
+            batch_arrow = pa.RecordBatch.from_pandas(df_chunk, preserve_index=False)
+            yield batch_arrow
+            del df_chunk
 
-        file_size_kb = round(os.path.getsize(local_dbc) / 1024, 2)
-        logger.info(f"Successfully downloaded {filename} ({file_size_kb} KB) to {local_dbc}")
-        return local_dbc
+    def parse_chunks(self, raw_data: Any, chunksize: int = 100000) -> Generator[pd.DataFrame, None, None]:
+        """
+        Gerador de compatibilidade que retorna DataFrames a partir dos Arrow RecordBatches.
+        """
+        for batch in self.parse_record_batches(raw_data, chunksize=chunksize):
+            yield batch.to_pandas()
 
     def parse(self, raw_data: Any) -> pd.DataFrame:
         """
-        Parses DBC -> DBF or JSON into a pandas DataFrame.
+        Parsing legado para pequenos arquivos ou testes.
         """
-        file_path = str(raw_data)
-        if not os.path.exists(file_path):
-            raise FileNotFoundError(f"Source file not found: {file_path}")
-
-        if file_path.endswith(".json"):
+        if isinstance(raw_data, str) and (raw_data.lower().endswith(".json") or self.subsystem == "SISAB"):
             import json
-            with open(file_path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            df = pd.DataFrame(data)
-            df.columns = [str(col).upper().strip() for col in df.columns]
-            logger.info(f"Parsed {len(df)} records from JSON {os.path.basename(file_path)}")
-            return df
+            with open(raw_data, "r", encoding="utf-8") as f_json:
+                data = json.load(f_json)
+                return pd.DataFrame(data)
 
-        # Target DBF path
-        dbf_path = file_path.replace(".dbc", ".dbf").replace(".DBC", ".dbf")
-
-        logger.info(f"Decompressing DBC: {file_path} -> {dbf_path}")
-        if pyreaddbc is not None:
-            pyreaddbc.dbc2dbf(file_path, dbf_path)
+        if isinstance(raw_data, (list, tuple)):
+            dfs = [chunk for p in raw_data for chunk in self.parse_chunks(p, chunksize=100000)]
+            return pd.concat(dfs, ignore_index=True) if dfs else pd.DataFrame()
         else:
-            raise RuntimeError("pyreaddbc library is required for DBC decompression on DATASUS files.")
-
-        logger.info(f"Reading DBF into DataFrame: {dbf_path}")
-        for encoding in ("iso-8859-1", "latin1", "cp1252", "utf-8"):
-            try:
-                table = DBF(dbf_path, encoding=encoding, load=True, ignore_missing_memofile=True)
-                df = pd.DataFrame(iter(table))
-                break
-            except UnicodeDecodeError:
-                continue
-            except Exception as e:
-                logger.warning(f"Error reading DBF with {encoding}: {e}")
-        else:
-            table = DBF(dbf_path, load=True, ignore_missing_memofile=True)
-            df = pd.DataFrame(iter(table))
-
-        # Standardize column headers
-        df.columns = [str(col).upper().strip() for col in df.columns]
-        logger.info(f"Successfully parsed {len(df)} records from {os.path.basename(file_path)}. Columns: {len(df.columns)}")
-        return df
+            dfs = list(self.parse_chunks(raw_data, chunksize=100000))
+            return pd.concat(dfs, ignore_index=True) if dfs else pd.DataFrame()

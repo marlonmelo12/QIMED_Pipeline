@@ -1,4 +1,4 @@
-"""Tests for the data collectors."""
+"""Testes unitários para os coletores de dados."""
 import os
 import sys
 import json
@@ -11,10 +11,10 @@ from src.collectors.base import BaseCollector, CollectorConfig, CircuitBreakerOp
 from src.collectors.fhir_collector import FhirSyntheticCollector
 
 
-# --- Concrete test collector for testing BaseCollector ---
+# --- Coletor concreto para testes da classe base BaseCollector ---
 
 class SuccessCollector(BaseCollector):
-    """Always-succeeds collector for testing base class logic."""
+    """Coletor que sempre tem sucesso para testar a lógica da classe base."""
 
     def get_source_type(self) -> str:
         return "test_source"
@@ -27,23 +27,23 @@ class SuccessCollector(BaseCollector):
 
 
 class FailCollector(BaseCollector):
-    """Always-fails collector for testing retry and circuit breaker."""
+    """Coletor que sempre falha para testar retentativas e circuit breaker."""
 
     def get_source_type(self) -> str:
         return "fail_source"
 
     def fetch(self):
-        raise ConnectionError("Simulated FTP failure")
+        raise ConnectionError("Falha simulada de conexão FTP")
 
     def parse(self, raw_data) -> pd.DataFrame:
         return pd.DataFrame()
 
 
 class TestFhirSyntheticCollector:
-    """Tests for the FHIR synthetic data generator."""
+    """Testes para o gerador de dados sintéticos FHIR."""
 
     def test_generates_valid_bundles(self):
-        """Fetch should return FHIR Bundle dicts with entries."""
+        """O método fetch deve retornar dicionários de Bundles FHIR válidos."""
         collector = FhirSyntheticCollector(num_patients=5, encounters_per_patient=2)
         bundles = collector.fetch()
 
@@ -53,18 +53,18 @@ class TestFhirSyntheticCollector:
             assert bundle["type"] == "collection"
             assert len(bundle["entry"]) > 0
 
-            # First entry should be a Patient
+            # O primeiro recurso deve ser um Patient
             first_resource = bundle["entry"][0]["resource"]
             assert first_resource["resourceType"] == "Patient"
 
     def test_respects_num_patients_config(self):
-        """Number of bundles should match num_patients."""
+        """A quantidade de bundles gerados deve respeitar num_patients."""
         collector = FhirSyntheticCollector(num_patients=10, encounters_per_patient=1)
         bundles = collector.fetch()
         assert len(bundles) == 10
 
     def test_parse_produces_dataframe(self):
-        """Parse should flatten bundles into a DataFrame with resourceType and id."""
+        """O método parse deve achatar bundles em um DataFrame com resourceType e id."""
         collector = FhirSyntheticCollector(num_patients=3, encounters_per_patient=2)
         bundles = collector.fetch()
         df = collector.parse(bundles)
@@ -74,13 +74,13 @@ class TestFhirSyntheticCollector:
         assert "id" in df.columns
         assert len(df) > 0
 
-        # Should have Patient, Encounter, Condition, Observation, Procedure, Organization
+        # Deve conter Patient, Encounter, Condition, Observation, Procedure, Organization
         resource_types = set(df["resourceType"].unique())
         assert "Patient" in resource_types
         assert "Encounter" in resource_types
 
     def test_patient_rows_have_flattened_pii(self):
-        """Patient rows should have flattened PII fields for LGPD detection."""
+        """Linhas de Patient devem ter campos PII achatados para detecção LGPD."""
         collector = FhirSyntheticCollector(num_patients=2, encounters_per_patient=1)
         bundles = collector.fetch()
         df = collector.parse(bundles)
@@ -93,10 +93,10 @@ class TestFhirSyntheticCollector:
 
 
 class TestBaseCollectorCheckpoint:
-    """Tests for the checkpoint save/load mechanism."""
+    """Testes para o mecanismo de salvamento e recuperação de checkpoint."""
 
     def test_checkpoint_saves_state(self, tmp_path):
-        """save_checkpoint should write a JSON state file."""
+        """save_checkpoint deve gravar um arquivo de estado JSON."""
         config = CollectorConfig(state_dir=str(tmp_path / ".state"))
         collector = SuccessCollector(config=config)
 
@@ -111,7 +111,7 @@ class TestBaseCollectorCheckpoint:
         assert state["offset"] == 1024
 
     def test_checkpoint_loads_state(self, tmp_path):
-        """load_checkpoint should return saved state."""
+        """load_checkpoint deve retornar o estado salvo."""
         config = CollectorConfig(state_dir=str(tmp_path / ".state"))
         collector = SuccessCollector(config=config)
 
@@ -122,7 +122,7 @@ class TestBaseCollectorCheckpoint:
         assert loaded["cursor"] == "abc123"
 
     def test_checkpoint_returns_none_if_missing(self, tmp_path):
-        """load_checkpoint should return None if no state file exists."""
+        """load_checkpoint deve retornar None se não houver arquivo de estado."""
         config = CollectorConfig(state_dir=str(tmp_path / ".no_state"))
         collector = SuccessCollector(config=config)
 
@@ -130,32 +130,32 @@ class TestBaseCollectorCheckpoint:
 
 
 class TestBaseCollectorCircuitBreaker:
-    """Tests for the circuit breaker mechanism."""
+    """Testes para o mecanismo de disjuntor (circuit breaker)."""
 
     def test_circuit_breaker_opens_after_consecutive_failures(self):
-        """After max_retries consecutive failures, circuit breaker should open."""
+        """Após falhas consecutivas superiores a max_retries, o circuit breaker deve abrir."""
         config = CollectorConfig(max_retries=2, retry_backoff=0)
         collector = FailCollector(config=config)
 
-        # First run: fails max_retries times, raises ConnectionError
+        # Primeira execução: falha max_retries vezes e lança ConnectionError
         with pytest.raises(ConnectionError):
             collector.run()
 
         assert collector.consecutive_failures == 2
 
-        # Second run: circuit breaker is now open
+        # Segunda execução: disjuntor já está aberto
         with pytest.raises(CircuitBreakerOpen):
             collector.run()
 
     def test_success_resets_circuit_breaker(self):
-        """A successful run should reset the failure counter."""
+        """Uma execução bem-sucedida deve reiniciar o contador de falhas."""
         config = CollectorConfig(max_retries=3, retry_backoff=0)
         collector = SuccessCollector(config=config)
 
-        # Simulate prior failures
+        # Simula falhas prévias
         collector.consecutive_failures = 2
 
-        # Successful run should reset
+        # Execução com sucesso deve zerar falhas
         result = collector.run()
         assert collector.consecutive_failures == 0
         assert len(result) == 2

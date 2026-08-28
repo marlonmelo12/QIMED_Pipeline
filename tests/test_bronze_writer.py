@@ -1,4 +1,4 @@
-"""Tests for the BronzeWriter (Delta Lake)."""
+"""Testes unitários para o BronzeWriter (Delta Lake)."""
 import os
 import sys
 import pytest
@@ -12,13 +12,13 @@ from src.lakehouse.bronze_writer import BronzeWriter
 
 @pytest.fixture
 def writer(tmp_lakehouse):
-    """BronzeWriter pointing to a temp directory."""
+    """Instância do BronzeWriter apontando para um diretório temporário."""
     return BronzeWriter(lakehouse_path=tmp_lakehouse)
 
 
 @pytest.fixture
 def sample_df():
-    """Simple DataFrame for Bronze writes."""
+    """DataFrame de exemplo para testes de gravação na Bronze."""
     return pd.DataFrame({
         "patient_id": ["p1", "p2", "p3"],
         "diagnosis": ["A00", "B15", "C34"],
@@ -38,22 +38,22 @@ def metadata():
 
 
 class TestBronzeWriter:
-    """Tests for BronzeWriter."""
+    """Testes para o BronzeWriter."""
 
     def test_write_creates_delta_table(self, writer, sample_df, metadata):
-        """Writing should create a Delta table at the expected path."""
+        """A gravação deve criar uma tabela Delta no caminho esperado."""
         stats = writer.write(sample_df, metadata)
 
         assert stats["rows_written"] == 3
         assert os.path.exists(stats["table_path"])
 
-        # Verify it's a valid Delta table
+        # Verifica se é uma tabela Delta válida
         dt = DeltaTable(stats["table_path"])
         result = dt.to_pandas()
         assert len(result) == 3
 
     def test_write_adds_metadata_columns(self, writer, sample_df, metadata):
-        """Written data should have ingestion metadata columns."""
+        """Os dados gravados devem conter colunas de metadados de ingestão."""
         stats = writer.write(sample_df, metadata)
 
         dt = DeltaTable(stats["table_path"])
@@ -66,7 +66,7 @@ class TestBronzeWriter:
         assert result["_source_file"].iloc[0] == "RDCE2601.dbc"
 
     def test_write_partitions_correctly(self, writer, sample_df, metadata):
-        """Data should be partitioned by year and month."""
+        """Os dados devem ser particionados por ano e mês."""
         stats = writer.write(sample_df, metadata)
 
         dt = DeltaTable(stats["table_path"])
@@ -76,7 +76,7 @@ class TestBronzeWriter:
         assert "month" in result.columns
 
     def test_append_mode_adds_rows(self, writer, sample_df, metadata):
-        """Writing twice should append, not overwrite."""
+        """Gravar duas vezes deve anexar (append), sem sobrescrever."""
         writer.write(sample_df, metadata)
         writer.write(sample_df, metadata)
 
@@ -84,11 +84,11 @@ class TestBronzeWriter:
         dt = DeltaTable(table_path)
         result = dt.to_pandas()
 
-        # 3 rows x 2 writes = 6 rows (append mode)
+        # 3 linhas x 2 gravações = 6 linhas (modo append)
         assert len(result) == 6
 
     def test_empty_df_skips_write(self, writer, metadata):
-        """Empty DataFrame should not create a table."""
+        """DataFrame vazio não deve criar tabela."""
         empty_df = pd.DataFrame(columns=["col1", "col2"])
         stats = writer.write(empty_df, metadata)
 

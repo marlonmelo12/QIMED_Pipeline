@@ -1,9 +1,9 @@
 """
-Brazilian Health Terminology Service for QIMED DataQore.
-Normalizes and validates clinical and administrative coding systems:
-- CID-10 (International Classification of Diseases 10th Revision)
+Serviço de Terminologias em Saúde Brasileiras para o QIMED DataQore.
+Normaliza e valida sistemas de codificação clínica e administrativa:
+- CID-10 (Classificação Internacional de Doenças 10ª Revisão)
 - SIGTAP (Sistema de Gerenciamento da Tabela de Procedimentos do SUS)
-- IBGE Municipality Codes
+- Códigos de Municípios do IBGE
 - CBO (Classificação Brasileira de Ocupações)
 """
 import re
@@ -12,7 +12,7 @@ from src.utils.logging_config import get_logger
 
 logger = get_logger(__name__)
 
-# Standard FHIR System URIs for Brazilian healthcare
+# URIs padrão FHIR para a saúde brasileira
 FHIR_SYSTEM_CID10 = "http://hl7.org/fhir/sid/icd-10"
 FHIR_SYSTEM_SIGTAP = "http://sigtap.datasus.gov.br"
 FHIR_SYSTEM_IBGE = "http://ibge.gov.br/cidades"
@@ -20,7 +20,7 @@ FHIR_SYSTEM_CBO = "http://cbo.mte.gov.br"
 FHIR_SYSTEM_CNES = "http://cnes.saude.gov.br"
 FHIR_SYSTEM_CPF = "http://rnds.saude.gov.br/fhir/r4/NamingSystem/cpf"
 
-# CID-10 Chapters mapping (A00-Z99)
+# Mapeamento de Capítulos do CID-10 (A00-Z99)
 CID10_CHAPTERS = {
     "I": ("A00", "B99", "Algumas doenças infecciosas e parasitárias"),
     "II": ("C00", "D48", "Neoplasias (tumores)"),
@@ -43,9 +43,10 @@ CID10_CHAPTERS = {
     "XIX": ("S00", "T98", "Lesões, envenenamento e algumas outras conseqüências de causas externas"),
     "XX": ("V01", "Y98", "Causas externas de morbidade e de mortalidade"),
     "XXI": ("Z00", "Z99", "Fatores que influenciam o estado de saúde e o contato com os serviços de saúde"),
+    "XXII": ("U00", "U99", "Códigos para situações especiais (COVID-19)")
 }
 
-# SIGTAP Groups (first 2 digits)
+# Grupos do SIGTAP (primeiros 2 dígitos)
 SIGTAP_GROUPS = {
     "01": "Ações de promoção e prevenção em saúde",
     "02": "Procedimentos com finalidade diagnóstica",
@@ -57,7 +58,7 @@ SIGTAP_GROUPS = {
     "08": "Ações complementares da atenção à saúde",
 }
 
-# Brazilian State Codes (IBGE prefix)
+# Prefixos estaduais do IBGE
 UF_IBGE_PREFIX = {
     "11": "RO", "12": "AC", "13": "AM", "14": "RR", "15": "PA", "16": "AP", "17": "TO",
     "21": "MA", "22": "PI", "23": "CE", "24": "RN", "25": "PB", "26": "PE", "27": "AL", "28": "SE", "29": "BA",
@@ -69,35 +70,35 @@ UF_IBGE_PREFIX = {
 
 class TerminologyService:
     """
-    Standardization, lookup, and validation engine for Brazilian healthcare terminologies.
+    Motor de padronização, consulta e validação de terminologias de saúde brasileiras.
     """
 
     @staticmethod
     def normalize_cid10(code: Optional[str]) -> Tuple[Optional[str], Optional[Dict[str, Any]]]:
         """
-        Normalize and validate a CID-10 diagnostic code.
-        Returns (normalized_code, metadata_dict).
-        Example: 'a090' -> ('A09.0', {'chapter': 'I', 'description': '...', 'valid': True})
+        Normaliza e valida um código de diagnóstico CID-10.
+        Retorna (codigo_normalizado, dicionario_metadados).
+        Exemplo: 'a090' -> ('A09.0', {'chapter': 'I', 'description': '...', 'valid': True})
         """
         if not code or str(code).strip() == "" or str(code).upper() in ("NAN", "NONE", "NULL"):
             return None, None
 
         raw = str(code).strip().upper()
-        # Clean non-alphanumeric except dot
+        # Remove caracteres não alfanuméricos
         clean = re.sub(r"[^A-Z0-9]", "", raw)
         if len(clean) < 3:
-            return raw, {"valid": False, "reason": "Code too short"}
+            return raw, {"valid": False, "reason": "Código muito curto"}
 
-        # Extract letter and number
+        # Extrai categoria e subcategoria
         category = clean[:3]
         subcat = clean[3:] if len(clean) > 3 else None
 
         if not re.match(r"^[A-Z][0-9]{2}$", category):
-            return raw, {"valid": False, "reason": "Invalid CID-10 format"}
+            return raw, {"valid": False, "reason": "Formato CID-10 inválido"}
 
         formatted_code = f"{category}.{subcat}" if subcat else category
 
-        # Identify chapter
+        # Identifica capítulo
         chapter_info = None
         for chapter, (start, end, desc) in CID10_CHAPTERS.items():
             if start <= category <= end:
@@ -124,8 +125,8 @@ class TerminologyService:
     @staticmethod
     def normalize_sigtap(code: Optional[str]) -> Tuple[Optional[str], Optional[Dict[str, Any]]]:
         """
-        Normalize and validate a SIGTAP SUS procedure code (10 digits).
-        Format: GG.SS.FF.NNN-D (Group.Subgroup.Form.Number-DV)
+        Normaliza e valida um código de procedimento SIGTAP/SUS (10 dígitos).
+        Formato: GG.SS.FF.NNN-D (Grupo.Subgrupo.Forma.Número-DV)
         """
         if not code or str(code).strip() == "" or str(code).upper() in ("NAN", "NONE", "NULL"):
             return None, None
@@ -133,12 +134,12 @@ class TerminologyService:
         raw = str(code).strip()
         digits = re.sub(r"\D", "", raw)
 
-        # Pad left with zero if 9 digits (common in DATASUS missing leading zero)
+        # Preenche com zero à esquerda se tiver 9 dígitos (comum no DATASUS)
         if len(digits) == 9:
             digits = "0" + digits
 
         if len(digits) != 10:
-            return raw, {"valid": False, "reason": f"Expected 10 digits, got {len(digits)}"}
+            return raw, {"valid": False, "reason": f"Esperado 10 dígitos, obtido {len(digits)}"}
 
         group_code = digits[:2]
         subgroup_code = digits[2:4]
@@ -165,8 +166,8 @@ class TerminologyService:
     @staticmethod
     def normalize_ibge_municipality(code: Optional[str]) -> Tuple[Optional[str], Optional[Dict[str, Any]]]:
         """
-        Normalize IBGE 6-digit or 7-digit municipality code.
-        Extracts UF code and UF abbreviation.
+        Normaliza código de município do IBGE (6 ou 7 dígitos).
+        Extrai código da UF e sigla do estado.
         """
         if not code or str(code).strip() == "" or str(code).upper() in ("NAN", "NONE", "NULL"):
             return None, None
@@ -175,7 +176,7 @@ class TerminologyService:
         digits = re.sub(r"\D", "", raw)
 
         if len(digits) not in (6, 7):
-            return raw, {"valid": False, "reason": "IBGE code must have 6 or 7 digits"}
+            return raw, {"valid": False, "reason": "Código IBGE deve ter 6 ou 7 dígitos"}
 
         uf_prefix = digits[:2]
         uf_abbr = UF_IBGE_PREFIX.get(uf_prefix, "BR")
@@ -196,7 +197,7 @@ class TerminologyService:
     @staticmethod
     def build_fhir_concept(system: str, code: str, display: str = None) -> Dict[str, Any]:
         """
-        Build standard FHIR R4 CodeableConcept / Coding structure.
+        Constrói estrutura padrão FHIR R4 CodeableConcept / Coding.
         """
         return {
             "coding": [

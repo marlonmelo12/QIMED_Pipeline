@@ -1,4 +1,4 @@
-"""Tests for the LGPD Gate: PIIDetector and Anonymizer."""
+"""Testes unitários para o Portal LGPD: PIIDetector e Anonymizer."""
 import os
 import sys
 import pytest
@@ -11,37 +11,35 @@ from src.lgpd.anonymizer import Anonymizer
 
 
 class TestPIIDetector:
-    """Tests for PIIDetector."""
+    """Testes para o PIIDetector."""
 
     def test_finds_known_pii_fields(self, pii_manifest_path, sample_sih_df):
-        """PIIDetector should find PII fields that exist in both manifest and DataFrame."""
+        """O PIIDetector deve encontrar campos PII existentes no manifesto e no DataFrame."""
         detector = PIIDetector(manifest_path=pii_manifest_path)
         detected = detector.detect_pii_fields("datasus_sih", sample_sih_df)
 
-        # NASC and CPF_AUT are in both the manifest and the SIH DataFrame
+        # NASC e CPF_AUT estão presentes no manifesto e no DataFrame do SIH
         assert "NASC" in detected
         assert "CPF_AUT" in detected
-        # N_AIH is in manifest and DataFrame
         assert "N_AIH" in detected
 
     def test_ignores_safe_fields(self, pii_manifest_path, sample_sih_df):
-        """PIIDetector should NOT flag non-PII fields."""
+        """O PIIDetector NÃO deve marcar campos clínicos não sensíveis."""
         detector = PIIDetector(manifest_path=pii_manifest_path)
         detected = detector.detect_pii_fields("datasus_sih", sample_sih_df)
 
-        # These columns exist in the DF but are NOT in the PII manifest
         assert "DIAG_PRINC" not in detected
         assert "PROC_REA" not in detected
         assert "MUNIC_RES" not in detected
 
     def test_unknown_source_returns_empty(self, pii_manifest_path, sample_sih_df):
-        """Unknown source_type should return an empty list."""
+        """Fonte desconhecida deve retornar lista vazia."""
         detector = PIIDetector(manifest_path=pii_manifest_path)
         detected = detector.detect_pii_fields("unknown_source", sample_sih_df)
         assert detected == []
 
     def test_detects_fhir_pii(self, pii_manifest_path, sample_fhir_patient_df):
-        """PIIDetector should find PII fields in FHIR Patient data."""
+        """O PIIDetector deve encontrar campos PII em dados de Patient do FHIR."""
         detector = PIIDetector(manifest_path=pii_manifest_path)
         detected = detector.detect_pii_fields("fhir_synthetic", sample_fhir_patient_df)
 
@@ -51,30 +49,30 @@ class TestPIIDetector:
 
 
 class TestAnonymizer:
-    """Tests for the Anonymizer."""
+    """Testes para o Anonymizer."""
 
     def test_hashes_pii_fields(self, sample_sih_df):
-        """Anonymizer should replace PII values with SHA-256 hashes."""
+        """O Anonymizer deve substituir valores de PII por hashes SHA-256."""
         anon = Anonymizer(salt="test_salt_123")
         pii_fields = ["NASC", "CPF_AUT"]
 
         result_df, audit_log = anon.anonymize(sample_sih_df, pii_fields)
 
-        # Original values should be gone
+        # Valores originais não devem mais existir
         assert result_df["NASC"].iloc[0] != "19900101"
         assert result_df["CPF_AUT"].iloc[0] != "11111111111"
 
-        # Values should be hex strings (SHA-256 = 64 hex chars)
+        # Valores devem ser strings hexadecimais (SHA-256 = 64 caracteres)
         assert len(result_df["NASC"].iloc[0]) == 64
         assert all(c in "0123456789abcdef" for c in result_df["NASC"].iloc[0])
 
-        # Audit log should record what was anonymized
+        # O log de auditoria deve registrar os campos anonimizados
         assert audit_log["status"] == "success"
         assert "NASC" in audit_log["anonymized_columns"]
         assert "CPF_AUT" in audit_log["anonymized_columns"]
 
     def test_is_deterministic(self, sample_sih_df):
-        """Same input + same salt should produce the same hash every time."""
+        """A mesma entrada com o mesmo salt deve produzir o mesmo hash."""
         salt = "deterministic_salt"
         anon = Anonymizer(salt=salt)
 
@@ -84,7 +82,7 @@ class TestAnonymizer:
         assert result1["CPF_AUT"].tolist() == result2["CPF_AUT"].tolist()
 
     def test_different_salt_produces_different_hashes(self, sample_sih_df):
-        """Different salts should produce different hashes for the same input."""
+        """Salts diferentes devem produzir hashes diferentes para a mesma entrada."""
         anon1 = Anonymizer(salt="salt_alpha")
         anon2 = Anonymizer(salt="salt_beta")
 
@@ -94,7 +92,7 @@ class TestAnonymizer:
         assert result1["CPF_AUT"].tolist() != result2["CPF_AUT"].tolist()
 
     def test_non_pii_fields_unchanged(self, sample_sih_df):
-        """Fields NOT listed as PII should remain untouched."""
+        """Campos que não são PII devem permanecer inalterados."""
         anon = Anonymizer(salt="test_salt")
         original_diag = sample_sih_df["DIAG_PRINC"].tolist()
 
@@ -103,7 +101,7 @@ class TestAnonymizer:
         assert result_df["DIAG_PRINC"].tolist() == original_diag
 
     def test_no_pii_fields_returns_unchanged(self, sample_sih_df):
-        """Passing empty PII list should return the DataFrame unchanged."""
+        """Passar lista vazia de PII deve retornar o DataFrame inalterado."""
         anon = Anonymizer(salt="test_salt")
         result_df, audit_log = anon.anonymize(sample_sih_df, [])
 

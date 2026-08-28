@@ -1,0 +1,15 @@
+MAPEAMENTO_SIA_SILVER = {
+    "PA_CODUNI": "codigo_estabelecimento_cnes",
+    "PA_GESTOR": "codigo_gestor",
+    "PA_UFMUN": "codigo_municipio_estabelecimento",
+    "PA_PROC_ID": "codigo_procedimento_sigtap",
+    "PA_CIDPRI": "codigo_cid10_principal",
+    "PA_CIDSEC": "codigo_cid10_secundario",
+    "PA_SEXO": "sexo_biologico",
+    "PA_IDADE": "idade_paciente_anos",
+    "PA_MUNPCN": "codigo_municipio_residencia_paciente",
+    "PA_QTDPRO": "quantidade_produzida",
+    "PA_QTDAPR": "quantidade_aprovada",
+    "PA_VALPRO": "valor_produzido_brl",
+    "PA_VALAPR": "valor_aprovado_brl",
+}

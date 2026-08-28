@@ -1,5 +1,5 @@
 """
-Unit tests for SilverWriter and Delta Lake persistence.
+Testes unitários para o SilverWriter e persistência no Delta Lake.
 """
 import os
 import pytest
@@ -11,7 +11,7 @@ from src.lakehouse.silver_writer import SilverWriter
 
 
 class TestSilverWriter:
-    """Tests for SilverWriter Delta Lake tables."""
+    """Testes para o gerenciamento de tabelas Delta Lake pelo SilverWriter."""
 
     @pytest.fixture
     def silver_tmp_dir(self, tmp_path):
@@ -20,7 +20,7 @@ class TestSilverWriter:
         return str(s_dir)
 
     def test_write_canonical_dataset(self, silver_tmp_dir):
-        """SilverWriter should create Delta tables for all non-empty canonical entities."""
+        """O SilverWriter deve criar tabelas Delta para todas as entidades não vazias."""
         writer = SilverWriter(silver_base_path=silver_tmp_dir)
 
         dataset = CanonicalDataset(
@@ -42,14 +42,14 @@ class TestSilverWriter:
         assert results["fct_conditions"]["status"] == "success"
         assert results["dim_organizations"]["status"] == "skipped_empty"
 
-        # Verify Delta table on disk
+        # Verifica tabela Delta em disco
         pat_table_path = os.path.join(silver_tmp_dir, "dim_patients")
         assert os.path.exists(pat_table_path)
         dt = DeltaTable(pat_table_path)
         assert len(dt.to_pandas()) == 1
 
     def test_append_silver_table(self, silver_tmp_dir):
-        """Writing multiple times should append new records."""
+        """Gravações sucessivas devem anexar novos registros sem corromper o histórico."""
         writer = SilverWriter(silver_base_path=silver_tmp_dir)
 
         df1 = pd.DataFrame([{"patient_master_id": "mpi_1", "state": "SP"}])
@@ -60,4 +60,22 @@ class TestSilverWriter:
 
         pat_table_path = os.path.join(silver_tmp_dir, "dim_patients")
         dt = DeltaTable(pat_table_path)
+        assert len(dt.to_pandas()) == 2
+
+    def test_silver_writer_idempotency_no_duplicates(self, silver_tmp_dir):
+        """Reexecuções com os mesmos dados não devem duplicar registros na Silver."""
+        writer = SilverWriter(silver_base_path=silver_tmp_dir)
+
+        df = pd.DataFrame([
+            {"patient_master_id": "mpi_100", "state": "CE", "gender": "female"},
+            {"patient_master_id": "mpi_200", "state": "SP", "gender": "male"}
+        ])
+
+        # Executa duas vezes
+        writer._write_table(df, "dim_patients")
+        writer._write_table(df, "dim_patients")
+
+        pat_table_path = os.path.join(silver_tmp_dir, "dim_patients")
+        dt = DeltaTable(pat_table_path)
+        # Deve ter exatamente 2 registros (0 duplicatas)
         assert len(dt.to_pandas()) == 2

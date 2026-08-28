@@ -1,3 +1,7 @@
+"""
+Catálogo de Metadados e Linhagem para o QIMED DataQore.
+Registra datasets ingeridos, contagem de registros, linhagem e conformidade LGPD.
+"""
 import os
 import json
 import uuid
@@ -11,14 +15,14 @@ logger = setup_logger(__name__)
 
 class DatasetCatalog:
     """
-    Minimal metadata catalog that registers ingested datasets in a JSON file.
-    Tracks lineage, basic schema info, and LGPD compliance status.
+    Catálogo de metadados que registra datasets ingeridos em arquivo JSON.
+    Rastreia linhagem, esquema básico e status de conformidade com a LGPD.
     """
 
     def __init__(self, catalog_path: str = None):
         """
-        Initialize the catalog.
-        Uses _metadata/catalog.json in the project root by default.
+        Inicializa o catálogo.
+        Usa _metadata/catalog.json na raiz do projeto por padrão.
         """
         if not catalog_path:
             base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -30,31 +34,31 @@ class DatasetCatalog:
         self._initialize_catalog()
 
     def _initialize_catalog(self):
-        """Create the catalog file if it doesn't exist."""
+        """Cria o arquivo de catálogo se ele não existir."""
         if not os.path.exists(self.catalog_path):
             try:
                 with open(self.catalog_path, 'w', encoding='utf-8') as f:
                     json.dump({"datasets": []}, f, indent=4)
-                logger.info(f"Initialized new dataset catalog at {self.catalog_path}")
+                logger.info(f"Catálogo de datasets inicializado em {self.catalog_path}")
             except Exception as e:
-                logger.error(f"Failed to initialize catalog: {e}")
+                logger.error(f"Falha ao inicializar catálogo: {e}")
 
     def _load_catalog(self) -> Dict[str, Any]:
-        """Load the catalog from disk."""
+        """Carrega o catálogo do disco."""
         try:
             with open(self.catalog_path, 'r', encoding='utf-8') as f:
                 return json.load(f)
         except Exception as e:
-            logger.error(f"Failed to load catalog: {e}")
+            logger.error(f"Falha ao carregar catálogo: {e}")
             return {"datasets": []}
 
     def _save_catalog(self, data: Dict[str, Any]):
-        """Save the catalog to disk."""
+        """Salva o catálogo em disco."""
         try:
             with open(self.catalog_path, 'w', encoding='utf-8') as f:
                 json.dump(data, f, indent=4)
         except Exception as e:
-            logger.error(f"Failed to save catalog: {e}")
+            logger.error(f"Falha ao salvar catálogo: {e}")
 
     def register_dataset(self, 
                          source_type: str, 
@@ -64,9 +68,9 @@ class DatasetCatalog:
                          pii_anonymized: bool,
                          extra_metadata: Dict[str, Any] = None) -> str:
         """
-        Register a newly ingested dataset into the catalog.
+        Registra um dataset recém-ingerido no catálogo.
         
-        Returns:
+        Retorna:
             dataset_id (str)
         """
         dataset_id = str(uuid.uuid4())
@@ -85,15 +89,15 @@ class DatasetCatalog:
         catalog_data["datasets"].append(entry)
         self._save_catalog(catalog_data)
         
-        logger.info(f"Registered dataset {dataset_id} for source {source_type}")
+        logger.info(f"Dataset {dataset_id} registrado para a fonte {source_type}")
         return dataset_id
 
     def list_datasets(self) -> List[Dict[str, Any]]:
-        """List all datasets in the catalog."""
+        """Lista todos os datasets registrados no catálogo."""
         return self._load_catalog().get("datasets", [])
 
     def get_dataset(self, dataset_id: str) -> Optional[Dict[str, Any]]:
-        """Retrieve a specific dataset by ID."""
+        """Recupera metadados de um dataset específico pelo ID."""
         datasets = self.list_datasets()
         for ds in datasets:
             if ds.get("dataset_id") == dataset_id:
@@ -101,6 +105,10 @@ class DatasetCatalog:
         return None
 
     def get_datasets_by_source(self, source_type: str) -> List[Dict[str, Any]]:
-        """Retrieve all datasets for a specific source type."""
+        """Recupera todos os datasets de um tipo específico de fonte."""
         datasets = self.list_datasets()
         return [ds for ds in datasets if ds.get("source_type") == source_type]
+
+
+# Alias para compatibilidade com DAGs do Airflow
+MetadataCatalog = DatasetCatalog

@@ -1,6 +1,6 @@
 """
-Semantic Mapper for Bronze FHIR Synthetic and Raw FHIR Bundles.
-Normalizes heterogeneous FHIR R4 resources into clean Silver canonical tables.
+Mapper Semântico para Dados Sintéticos e Recursos Brutos em padrão FHIR R4.
+Normaliza recursos heterogêneos do FHIR R4 nas tabelas canônicas da Camada Silver.
 """
 import ast
 import json
@@ -16,7 +16,7 @@ logger = get_logger(__name__)
 
 
 def _safe_parse_dict(val: Any) -> Dict[str, Any]:
-    """Safely parse string representations of JSON/dict."""
+    """Analisa e converte com segurança representações em string de JSON/dicionário."""
     if isinstance(val, dict):
         return val
     if not val or pd.isna(val):
@@ -32,14 +32,14 @@ def _safe_parse_dict(val: Any) -> Dict[str, Any]:
 
 class FhirSemanticMapper(BaseSemanticMapper):
     """
-    Normalizes tabular/raw Bronze FHIR resources into Silver canonical entities.
+    Normaliza recursos tabulares/brutos de FHIR da Camada Bronze em entidades canônicas da Camada Silver.
     """
 
     def map_to_canonical(self, df: pd.DataFrame, source_metadata: Optional[Dict[str, Any]] = None) -> CanonicalDataset:
         if df.empty:
             return CanonicalDataset()
 
-        logger.info(f"Normalizing {len(df)} Bronze FHIR resources to Silver model")
+        logger.info(f"Normalizando {len(df)} recursos FHIR da Camada Bronze para o modelo Silver")
 
         patients_list = []
         organizations_list = []
@@ -47,10 +47,10 @@ class FhirSemanticMapper(BaseSemanticMapper):
         conditions_list = []
         procedures_list = []
 
-        # Split by resourceType
+        # Agrupa por resourceType
         resource_groups = {rt: group for rt, group in df.groupby("resourceType")}
 
-        # 1. Patients
+        # 1. Pacientes (Patient)
         if "Patient" in resource_groups:
             pats = resource_groups["Patient"]
             for _, row in pats.iterrows():
@@ -71,13 +71,13 @@ class FhirSemanticMapper(BaseSemanticMapper):
                     "_updated_at": datetime.utcnow().isoformat()
                 })
 
-        # 2. Organizations
+        # 2. Organizações (Organization)
         if "Organization" in resource_groups:
             orgs = resource_groups["Organization"]
             for _, row in orgs.iterrows():
                 org_id = str(row.get("id", ""))
                 parsed_raw = _safe_parse_dict(row.get("raw_json", {}))
-                name = parsed_raw.get("name", f"Organization {org_id}")
+                name = parsed_raw.get("name", f"Organização {org_id}")
 
                 cnes_val = None
                 for ident in parsed_raw.get("identifier", []):
@@ -96,7 +96,7 @@ class FhirSemanticMapper(BaseSemanticMapper):
                     "_updated_at": datetime.utcnow().isoformat()
                 })
 
-        # 3. Encounters
+        # 3. Encontros / Internações (Encounter)
         if "Encounter" in resource_groups:
             encs = resource_groups["Encounter"]
             for _, row in encs.iterrows():
@@ -133,7 +133,7 @@ class FhirSemanticMapper(BaseSemanticMapper):
                     "_updated_at": datetime.utcnow().isoformat()
                 })
 
-        # 4. Conditions
+        # 4. Condições e Diagnósticos (Condition)
         if "Condition" in resource_groups:
             conds = resource_groups["Condition"]
             for _, row in conds.iterrows():
@@ -163,7 +163,7 @@ class FhirSemanticMapper(BaseSemanticMapper):
                     "_updated_at": datetime.utcnow().isoformat()
                 })
 
-        # 5. Procedures
+        # 5. Procedimentos Médicos (Procedure)
         if "Procedure" in resource_groups:
             procs = resource_groups["Procedure"]
             for _, row in procs.iterrows():
@@ -201,5 +201,5 @@ class FhirSemanticMapper(BaseSemanticMapper):
             fct_procedures=pd.DataFrame(procedures_list).drop_duplicates(subset=["procedure_id"]) if procedures_list else pd.DataFrame(),
             metadata={"source": "fhir_bronze", "row_count": len(df)}
         )
-        logger.info(f"FHIR normalization summary: {canonical.summary()}")
+        logger.info(f"Resumo da normalização FHIR: {canonical.summary()}")
         return canonical

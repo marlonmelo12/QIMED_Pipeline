@@ -1,6 +1,6 @@
 """
 Mapper Semantico para a ANS / D-TISS (Agencia Nacional de Saude Suplementar).
-Transforma dados de operadoras e beneficiarios privados na dimensao dim_health_plans.
+Transforma dados de operadoras e beneficiarios privados na dimensao dim_health_plans sem fabricacao de dados.
 """
 from typing import Dict, Any, Optional
 import pandas as pd
@@ -45,33 +45,56 @@ class AnsMapper(BaseSemanticMapper):
             return CanonicalDataset()
 
         pdf = df.copy()
+        pdf.columns = [c.lower() for c in pdf.columns]
+
+        # Normalização de nomes de colunas conhecidas sem fabricar valores
+        cd_op = pdf["cd_operadora"] if "cd_operadora" in pdf.columns else pdf.get("registro_ans", pd.Series([None] * len(pdf)))
+        cd_mun = pdf["cd_municipio_ibge"] if "cd_municipio_ibge" in pdf.columns else pdf.get("cd_municipio", pd.Series([None] * len(pdf)))
+        uf_col = pdf["uf"] if "uf" in pdf.columns else pdf.get("sg_uf", pd.Series([None] * len(pdf)))
+        razao_col = pdf.get("razao_social", pd.Series([None] * len(pdf)))
+        mod_col = pdf["modalidade"] if "modalidade" in pdf.columns else pdf.get("modalidade_operadora", pd.Series([None] * len(pdf)))
+        comp_col = pdf.get("competencia", pd.Series([None] * len(pdf)))
+
+        # Geração de plan_id determinístico baseado nos atributos presentes
+        plan_ids = []
+        for op, mun in zip(cd_op, cd_mun):
+            if pd.notna(op) and pd.notna(mun):
+                plan_ids.append(f"ans_plan_{op}_{mun}")
+            elif pd.notna(op):
+                plan_ids.append(f"ans_plan_{op}")
+            else:
+                plan_ids.append(None)
 
         # Calcular taxa de cobertura privada por municipio (%)
         taxas_cobertura = []
         for _, row in pdf.iterrows():
-            m_code = str(row.get("CD_MUNICIPIO_IBGE", ""))
-            ben = float(row.get("NR_BENEFICIARIOS_ATIVOS", 0))
-            pop = POPULACAO_IBGE_AC.get(m_code, 30000)
-            taxa = (ben / pop) * 100.0
-            taxas_cobertura.append(round(taxa, 2))
+            m_code = str(row.get("cd_municipio_ibge", "") or "").strip()
+            ben = row.get("nr_beneficiarios_ativos")
+            if pd.notna(ben) and m_code in POPULACAO_IBGE_AC:
+                pop = POPULACAO_IBGE_AC[m_code]
+                taxa = (float(ben) / pop) * 100.0
+                taxas_cobertura.append(round(taxa, 2))
+            elif pd.notna(ben) and len(m_code) >= 6:
+                taxa = (float(ben) / 30000.0) * 100.0
+                taxas_cobertura.append(round(taxa, 2))
+            else:
+                taxas_cobertura.append(None)
 
-        pdf["taxa_cobertura_privada_pct"] = taxas_cobertura
-
-        # Dimensao dim_health_plans
+        # Dimensao dim_health_plans com tipos anuláveis legítimos
         dim_health_plans = pd.DataFrame({
-            "plan_id": "ans_plan_" + pdf["CD_OPERADORA"].astype(str) + "_" + pdf["CD_MUNICIPIO_IBGE"].astype(str),
-            "ans_operator_code": pdf["CD_OPERADORA"].astype(str),
-            "operator_name": pdf["RAZAO_SOCIAL"].astype(str),
-            "modality": pdf["MODALIDADE_OPERADORA"].astype(str),
-            "municipality_code": pdf["CD_MUNICIPIO_IBGE"].astype(str),
-            "municipality_name": pdf["CD_MUNICIPIO_IBGE"].apply(resolver_nome_municipio),
-            "state": pdf["SG_UF"].astype(str),
-            "competence": pdf["COMPETENCIA"].astype(str),
-            "active_beneficiaries": pdf["NR_BENEFICIARIOS_ATIVOS"].astype(int),
-            "elderly_beneficiaries": pdf["NR_BENEFICIARIOS_IDOSOS"].astype(int),
-            "total_private_expenditure_brl": pdf["DESPESA_ASSISTENCIAL_TOTAL"].astype(float),
-            "loss_ratio_pct": pdf["SINISTRALIDADE_PCT"].astype(float),
-            "private_coverage_ratio_pct": pdf["taxa_cobertura_privada_pct"]
+            "plan_id": plan_ids,
+            "ans_operator_code": cd_op.astype("string"),
+            "operator_name": razao_col.astype("string"),
+            "modality": mod_col.astype("string"),
+            "municipality_code": cd_mun.astype("string"),
+            "municipality_name": cd_mun.apply(lambda m: resolver_nome_municipio(str(m)) if pd.notna(m) and str(m).strip() else None),
+            "state": uf_col.astype("string"),
+            "competence": comp_col.astype("string"),
+            "active_beneficiaries": pd.to_numeric(pdf.get("nr_beneficiarios_ativos"), errors="coerce").astype("Int64"),
+            "elderly_beneficiaries": pd.to_numeric(pdf.get("nr_beneficiarios_idosos"), errors="coerce").astype("Int64"),
+            "total_private_expenditure_brl": pd.to_numeric(pdf.get("despesa_assistencial_total"), errors="coerce").astype("Float64"),
+            "loss_ratio_pct": pd.to_numeric(pdf.get("sinistralidade_pct"), errors="coerce").astype("Float64"),
+            "private_coverage_ratio_pct": pd.Series(taxas_cobertura, dtype="Float64")
         })
 
         logger.info(f"AnsMapper gerou {len(dim_health_plans)} registros para dim_health_plans.")

@@ -1,3 +1,7 @@
+"""
+Configuração de Logs Estruturados em JSON para o QIMED DataQore.
+Padroniza registros de log para observabilidade e monitoramento em produção.
+"""
 import logging
 import json
 import os
@@ -8,12 +12,12 @@ from typing import Any, Dict
 
 class JSONFormatter(logging.Formatter):
     """
-    Formatter that outputs JSON strings for structured logging.
+    Formatador que emite strings JSON para logs estruturados.
     """
 
     def format(self, record: logging.LogRecord) -> str:
         """
-        Format the log record as a JSON string.
+        Formata o registro de log como uma string JSON estruturada.
         """
         log_entry: Dict[str, Any] = {
             "timestamp": datetime.fromtimestamp(record.created).isoformat(),
@@ -33,8 +37,8 @@ class JSONFormatter(logging.Formatter):
 
 def setup_logger(name: str) -> logging.Logger:
     """
-    Configures and returns a logger with JSON formatting.
-    Reads LOG_LEVEL from the environment (defaulting to INFO).
+    Configura e retorna um logger com formatação JSON.
+    Lê LOG_LEVEL das variáveis de ambiente (padrão: INFO).
     """
     log_level_str = os.getenv("LOG_LEVEL", "INFO").upper()
     log_level = getattr(logging, log_level_str, logging.INFO)
@@ -42,7 +46,7 @@ def setup_logger(name: str) -> logging.Logger:
     logger = logging.getLogger(name)
     logger.setLevel(log_level)
 
-    # Avoid duplicate handlers if logger is already configured
+    # Evita duplicação de manipuladores se o logger já estiver configurado
     if not logger.handlers:
         handler = logging.StreamHandler(sys.stdout)
         handler.setFormatter(JSONFormatter())
@@ -51,5 +55,5 @@ def setup_logger(name: str) -> logging.Logger:
     return logger
 
 
-# Alias for compatibility — some modules use get_logger, others setup_logger
+# Alias para compatibilidade entre módulos
 get_logger = setup_logger

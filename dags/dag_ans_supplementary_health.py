@@ -2,9 +2,21 @@
 DAG do Apache Airflow para Ingestao Mensal de Dados Abertos da ANS / D-TISS (Saude Suplementar).
 Captura beneficiarios, sinistralidade e despesa assistencial privada por municipio.
 """
+from datetime import datetime, timedelta
+import hashlib
 from airflow import DAG
 from airflow.operators.python import PythonOperator
-from datetime import datetime, timedelta
+
+from src.collectors.ans_collector import AnsCollector
+from src.validators.regulation_and_supplementary_validators import AnsValidator
+from src.lgpd.pii_detector import PIIDetector
+from src.lgpd.anonymizer import Anonymizer
+from src.lakehouse.bronze_writer import BronzeWriter
+from src.silver.pipeline import SilverTransformationPipeline
+from src.metadata.catalog import DatasetCatalog
+from src.utils.logging_config import get_logger
+
+logger = get_logger("dag_ans_supplementary_health")
 
 default_args = {
     'owner': 'qimed',
@@ -23,27 +35,68 @@ dag = DAG(
     tags=['ans', 'supplementary_health', 'operadoras', 'bronze', 'silver']
 )
 
-def fetch_ans_open_data(**kwargs):
-    """Coleta dados abertos de operadoras e beneficiarios da ANS."""
-    from src.collectors.ans_collector import AnsCollector
-    collector = AnsCollector(uf="AC")
-    return collector.fetch()
 
-def validate_ans_data(**kwargs):
-    """Valida integridade do esquema e colunas da ANS."""
-    pass
+def run_ans_pipeline(**kwargs):
+    """Executa o ciclo completo de ingestao ANS -> Bronze -> Silver."""
+    params = kwargs.get("params", {})
+    uf = params.get("uf", "CE")
+    year = int(params.get("year", 2026))
+    month = int(params.get("month", 5))
+    modalidade = params.get("modalidade", "operadoras")
 
-def write_bronze_ans(**kwargs):
-    """Persiste dados da ANS na Camada Bronze (Delta Lake)."""
-    pass
+    logger.info(f"Iniciando pipeline ANS ({modalidade}) para UF={uf} ({year}/{month:02d})")
+    collector = AnsCollector(modalidade=modalidade, uf=uf, year=year, month=month)
+    
+    # 1. Fetch & Parse
+    raw_data = collector.fetch()
+    df = collector.parse(raw_data)
+    if df.empty:
+        logger.warning(f"Nenhum registro encontrado na ANS para modalidade={modalidade}, UF={uf}")
+        return {"status": "skipped_empty", "modalidade": modalidade}
 
-def transform_to_silver_health_plans(**kwargs):
-    """Gera dimensao dim_health_plans e calcula taxa de cobertura privada."""
-    pass
+    # 2. LGPD Gate & Anonymization
+    detector = PIIDetector()
+    pii_fields = detector.detect_pii_fields(source_type=f"ans_{modalidade}", data=df)
+    anonymizer = Anonymizer()
+    df_anon, _ = anonymizer.anonymize(df, pii_fields=pii_fields)
 
-t1 = PythonOperator(task_id='fetch_ans_open_data', python_callable=fetch_ans_open_data, dag=dag)
-t2 = PythonOperator(task_id='validate_ans_data', python_callable=validate_ans_data, dag=dag)
-t3 = PythonOperator(task_id='write_bronze_ans', python_callable=write_bronze_ans, dag=dag)
-t4 = PythonOperator(task_id='transform_to_silver_health_plans', python_callable=transform_to_silver_health_plans, dag=dag)
+    # 3. Write Delta Bronze
+    writer = BronzeWriter()
+    res_bronze = writer.write(
+        df_anon,
+        metadata={
+            "source_type": f"ans_{modalidade}",
+            "subsystem": "ans",
+            "year": year,
+            "month": month,
+            "uf": uf,
+            "source_file": f"ans_{modalidade}_{uf}_{year}_{month:02d}",
+        }
+    )
 
-t1 >> t2 >> t3 >> t4
+    # 4. Transform to Silver
+    silver_pipe = SilverTransformationPipeline()
+    canonical = silver_pipe.transform_dataframe(df_anon, source_type="ans_data", source_file=f"ans_{modalidade}")
+
+    # 5. Catalog Registration
+    schema_fingerprint = hashlib.md5("".join(sorted(df_anon.columns)).encode()).hexdigest()
+    partition_path = f"ans/{modalidade}/year={year}/month={month:02d}/uf={uf}"
+    catalog = DatasetCatalog()
+    catalog.register_dataset(
+        source_type=f"ans_{modalidade}",
+        partition_path=partition_path,
+        row_count=len(df_anon),
+        schema_fingerprint=schema_fingerprint,
+        pii_anonymized=True,
+        extra_metadata={"uf": uf, "year": year, "month": month, "modalidade": modalidade}
+    )
+
+    logger.info(f"Pipeline ANS concluido com sucesso: {len(df_anon)} registros processados.")
+    return {"status": "success", "rows_written": len(df_anon), "modalidade": modalidade}
+
+
+t_ans_pipeline = PythonOperator(
+    task_id='run_ans_pipeline',
+    python_callable=run_ans_pipeline,
+    dag=dag
+)

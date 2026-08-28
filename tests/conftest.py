@@ -1,3 +1,6 @@
+"""
+Configurações globais e fixtures para a suite de testes pytest do QIMED.
+"""
 import os
 import sys
 import pytest
@@ -6,13 +9,17 @@ import yaml
 import json
 import tempfile
 
-# Ensure project root is on path
+# Garante que a raiz do projeto esteja no PYTHONPATH
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+# Garante secrets de teste padrão para o pipeline e MPI
+os.environ.setdefault("QIMED_MPI_SALT", "test_salt_secret_1234567890abcdef1234567890abcdef")
+os.environ.setdefault("SALT_SECRET", "test_salt_secret_1234567890abcdef1234567890abcdef")
 
 
 @pytest.fixture
 def tmp_lakehouse(tmp_path):
-    """Temporary directory for Bronze writes."""
+    """Diretório temporário para gravações na camada Bronze."""
     lh = tmp_path / "lakehouse" / "bronze"
     lh.mkdir(parents=True)
     return str(lh)
@@ -20,7 +27,7 @@ def tmp_lakehouse(tmp_path):
 
 @pytest.fixture
 def sample_sih_df():
-    """Small pandas DataFrame mimicking SIH data."""
+    """DataFrame de exemplo simulando microdados de internação do SIH/DATASUS."""
     return pd.DataFrame({
         "N_AIH": ["1234567890123", "2345678901234", "3456789012345", "4567890123456", "5678901234567"],
         "ANO_CMPT": ["2026", "2026", "2026", "2026", "2026"],
@@ -36,7 +43,7 @@ def sample_sih_df():
 
 @pytest.fixture
 def sample_cnes_df():
-    """Small pandas DataFrame mimicking CNES data."""
+    """DataFrame de exemplo simulando dados cadastrais do CNES."""
     return pd.DataFrame({
         "CNES": ["1234567", "2345678", "3456789"],
         "CODUFMUN": ["230440", "230370", "231290"],
@@ -48,7 +55,7 @@ def sample_cnes_df():
 
 @pytest.fixture
 def sample_fhir_patient_df():
-    """Small DataFrame mimicking flattened FHIR Patient data."""
+    """DataFrame de exemplo simulando dados de Paciente FHIR achatados."""
     return pd.DataFrame({
         "resourceType": ["Patient", "Patient"],
         "id": ["pat1", "pat2"],
@@ -62,7 +69,7 @@ def sample_fhir_patient_df():
 
 @pytest.fixture
 def pii_manifest_path(tmp_path):
-    """Creates a test PII manifest YAML file."""
+    """Cria arquivo temporário do manifesto de governança PII/LGPD para testes."""
     manifest = {
         "datasus_sih": ["NASC", "N_AIH", "CPF_AUT", "NOME_PAC"],
         "datasus_cnes": ["CPF_PROF", "NOME_PROF"],

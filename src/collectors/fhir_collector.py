@@ -1,3 +1,7 @@
+"""
+Coletor de Dados Sintéticos em padrão FHIR R4 para o QIMED.
+Gera pacientes, encontros, condições clínicas e procedimentos sintéticos realistas.
+"""
 import random
 import uuid
 import hashlib
@@ -10,7 +14,7 @@ from src.utils.logging_config import get_logger
 
 logger = get_logger(__name__)
 
-# Realistic Brazilian data for synthetic generation
+# Dados brasileiros realistas para geração sintética
 _FIRST_NAMES = [
     "João", "Maria", "Pedro", "Ana", "Carlos", "Francisca", "Lucas",
     "Juliana", "Rafael", "Beatriz", "Matheus", "Fernanda", "Gabriel",
@@ -34,15 +38,15 @@ _MUNICIPALITIES = [
 
 
 def _fake_cpf() -> str:
-    """Generate a fake CPF-format string (not a valid CPF)."""
+    """Gera uma string simulada no formato de CPF para testes."""
     digits = [random.randint(0, 9) for _ in range(11)]
     return "".join(map(str, digits))
 
 
 class FhirSyntheticCollector(BaseCollector):
     """
-    Generates synthetic FHIR R4 Bundles with realistic Brazilian healthcare data.
-    Resources: Patient, Encounter, Condition, Observation, Procedure, Organization.
+    Gera Bundles FHIR R4 sintéticos com dados demográficos e clínicos brasileiros realistas.
+    Recursos: Patient, Encounter, Condition, Observation, Procedure, Organization.
     """
 
     def __init__(
@@ -59,10 +63,10 @@ class FhirSyntheticCollector(BaseCollector):
         return "fhir_synthetic"
 
     def fetch(self) -> List[Dict]:
-        """Generate synthetic FHIR Bundles."""
+        """Gera Bundles sintéticos em padrão FHIR R4."""
         logger.info(
-            f"Generating {self.num_patients} synthetic patients "
-            f"with {self.encounters_per_patient} encounters each"
+            f"Gerando {self.num_patients} pacientes sintéticos "
+            f"com {self.encounters_per_patient} encontros cada"
         )
         bundles: List[Dict] = []
 
@@ -92,7 +96,7 @@ class FhirSyntheticCollector(BaseCollector):
 
             entries = [{"resource": patient}]
 
-            # Organization
+            # Organização hospitalar
             org_id = str(uuid.uuid4())
             org = {
                 "resourceType": "Organization",
@@ -123,7 +127,7 @@ class FhirSyntheticCollector(BaseCollector):
                 }
                 entries.append({"resource": encounter})
 
-                # Condition
+                # Condição / Diagnóstico
                 condition = {
                     "resourceType": "Condition",
                     "id": str(uuid.uuid4()),
@@ -138,20 +142,20 @@ class FhirSyntheticCollector(BaseCollector):
                 }
                 entries.append({"resource": condition})
 
-                # Observation (vital sign)
+                # Observação clínica (sinais vitais)
                 observation = {
                     "resourceType": "Observation",
                     "id": str(uuid.uuid4()),
                     "status": "final",
                     "subject": {"reference": f"Patient/{patient_id}"},
                     "encounter": {"reference": f"Encounter/{enc_id}"},
-                    "code": {"coding": [{"system": "http://loinc.org", "code": "8867-4", "display": "Heart rate"}]},
+                    "code": {"coding": [{"system": "http://loinc.org", "code": "8867-4", "display": "Frequência Cardíaca"}]},
                     "valueQuantity": {"value": random.randint(60, 120), "unit": "bpm"},
                     "effectiveDateTime": start.isoformat(),
                 }
                 entries.append({"resource": observation})
 
-                # Procedure
+                # Procedimento médico
                 procedure = {
                     "resourceType": "Procedure",
                     "id": str(uuid.uuid4()),
@@ -172,11 +176,11 @@ class FhirSyntheticCollector(BaseCollector):
             }
             bundles.append(bundle)
 
-        logger.info(f"Generated {len(bundles)} FHIR Bundles")
+        logger.info(f"Bundles FHIR gerados: {len(bundles)}")
         return bundles
 
     def parse(self, raw_data: Any) -> pd.DataFrame:
-        """Flatten FHIR Bundles into a tabular DataFrame (one row per resource)."""
+        """Achata (flatten) Bundles FHIR em um DataFrame tabular (uma linha por recurso)."""
         bundles: List[Dict] = raw_data
         rows: List[Dict] = []
 
@@ -192,7 +196,7 @@ class FhirSyntheticCollector(BaseCollector):
                     "raw_json": str(resource),
                 }
 
-                # Flatten Patient-specific fields for PII detection
+                # Extrai campos específicos de Paciente para detecção de PII
                 if resource_type == "Patient":
                     names = resource.get("name", [{}])
                     if names:
@@ -205,7 +209,7 @@ class FhirSyntheticCollector(BaseCollector):
                         if "cpf" in ident.get("system", "").lower():
                             row["cpf"] = ident.get("value", "")
 
-                # Flatten Encounter fields
+                # Extrai campos de Encontro Hospitalar (Encounter)
                 elif resource_type == "Encounter":
                     row["subject_ref"] = resource.get("subject", {}).get("reference", "")
                     period = resource.get("period", {})
@@ -215,5 +219,9 @@ class FhirSyntheticCollector(BaseCollector):
                 rows.append(row)
 
         df = pd.DataFrame(rows)
-        logger.info(f"Parsed {len(df)} resources from {len(bundles)} bundles")
+        logger.info(f"Recursos FHIR parseados: {len(df)} a partir de {len(bundles)} bundles")
         return df
+
+
+# Alias para retrocompatibilidade
+SyntheticFHIRCollector = FhirSyntheticCollector
