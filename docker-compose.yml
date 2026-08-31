@@ -100,7 +100,8 @@ services:
     restart: on-failure
   qimed-api:
     build: .
-    command: uvicorn src.api.main:app --host 0.0.0.0 --port 8000
+    command:
+    - uvicorn src.api.main:app --host 0.0.0.0 --port 8000
     restart: always
     ports:
     - 8000:8000
