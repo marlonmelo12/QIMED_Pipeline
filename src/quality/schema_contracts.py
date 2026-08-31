@@ -149,7 +149,7 @@ SIA_PA_CONTRACT = SubsystemContract(
                       description="Competência (AAAAMM). Parte da PK sha256."),
         FieldContract(name="PA_MUNPCN",  severity=FieldSeverity.REQUIRED, accepted_types=["str", "int"],
                       description="Município de residência do paciente. Parte da PK e FK territorial."),
-        FieldContract(name="PA_CNS_PAC", severity=FieldSeverity.REQUIRED, accepted_types=["str", "int"],
+        FieldContract(name="PA_CNS_PAC", severity=FieldSeverity.EXPECTED, accepted_types=["str", "int"],
                       description="CNS do paciente (anonimizado na fonte). Parte da PK sha256."),
         FieldContract(name="PA_SEXO",    severity=FieldSeverity.REQUIRED, accepted_types=["str", "int"],
                       description="Sexo biológico. Harmonizado em M/F/I na Silver."),
