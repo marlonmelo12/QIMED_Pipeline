@@ -120,6 +120,7 @@ class DeltaBatchSink:
                 mode="overwrite",
                 predicate=predicate,
                 partition_by=["ano", "mes", "uf"],
+                max_rows_per_file=50000,
                 schema_mode="merge",
             )
             del all_tables, combined_table
