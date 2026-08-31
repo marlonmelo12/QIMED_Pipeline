@@ -47,7 +47,7 @@ airflow.db
 standalone_admin_password.txt
 
 # --- 4. Armazenamento Lakehouse & Bases Locais ---
-lakehouse/
+/lakehouse/
 .collector_state/
 _metadata/
 temp/
