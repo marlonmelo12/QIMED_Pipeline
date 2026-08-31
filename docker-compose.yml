@@ -1,104 +1,126 @@
 x-airflow-common:
-  &airflow-common
   build: .
-  environment:
-    - AIRFLOW__CORE__EXECUTOR=LocalExecutor
-    - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://airflow:airflow@postgres:5432/airflow
-    - AIRFLOW__CORE__DAGS_FOLDER=/opt/qimed/dags
-    - AIRFLOW__CORE__LOAD_EXAMPLES=False
-    - AIRFLOW__WEBSERVER__SECRET_KEY=qimed_secret_key_change_in_prod
-    - PYTHONPATH=/opt/qimed
-    - QIMED_MPI_SALT=${QIMED_MPI_SALT:-qimed_dev_salt_2026_mpi_secret_key}
-    - SALT_SECRET=${SALT_SECRET:-qimed_dev_salt_2026}
-    - LAKEHOUSE_PATH=/opt/qimed/lakehouse/bronze
-    - LAKEHOUSE_ROOT=/opt/qimed/lakehouse
-    - WAREHOUSE_PATH=/opt/qimed/warehouse
-    - LOG_LEVEL=${LOG_LEVEL:-INFO}
-    - AIRFLOW__API__AUTH_BACKENDS=airflow.api.auth.backend.basic_auth,airflow.api.auth.backend.session
-  volumes:
-    - ./dags:/opt/qimed/dags
-    - ./src:/opt/qimed/src
-    - ./config:/opt/qimed/config
-    - ./tests:/opt/qimed/tests
-    - ./lakehouse:/opt/qimed/lakehouse
-    - ./warehouse:/opt/qimed/warehouse
-    - ./logs:/opt/airflow/logs
-  depends_on:
+  environment: &id001
+  - AIRFLOW__CORE__EXECUTOR=LocalExecutor
+  - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://airflow:airflow@postgres:5432/airflow
+  - AIRFLOW__CORE__DAGS_FOLDER=/opt/qimed/dags
+  - AIRFLOW__CORE__LOAD_EXAMPLES=False
+  - AIRFLOW__WEBSERVER__SECRET_KEY=qimed_secret_key_change_in_prod
+  - PYTHONPATH=/opt/qimed
+  - QIMED_MPI_SALT=${QIMED_MPI_SALT:-qimed_dev_salt_2026_mpi_secret_key}
+  - SALT_SECRET=${SALT_SECRET:-qimed_dev_salt_2026}
+  - LAKEHOUSE_PATH=/opt/qimed/lakehouse/bronze
+  - LAKEHOUSE_ROOT=/opt/qimed/lakehouse
+  - WAREHOUSE_PATH=/opt/qimed/warehouse
+  - LOG_LEVEL=${LOG_LEVEL:-INFO}
+  - AIRFLOW__API__AUTH_BACKENDS=airflow.api.auth.backend.basic_auth,airflow.api.auth.backend.session
+  volumes: &id002
+  - ./dags:/opt/qimed/dags
+  - ./src:/opt/qimed/src
+  - ./config:/opt/qimed/config
+  - ./tests:/opt/qimed/tests
+  - ./lakehouse:/opt/qimed/lakehouse
+  - ./warehouse:/opt/qimed/warehouse
+  - ./logs:/opt/airflow/logs
+  depends_on: &id003
     postgres:
       condition: service_healthy
   networks:
-    - qimed-network
-
+  - qimed-network
 services:
   postgres:
     image: postgres:13
     restart: always
     environment:
-      - POSTGRES_USER=airflow
-      - POSTGRES_PASSWORD=airflow
-      - POSTGRES_DB=airflow
+    - POSTGRES_USER=airflow
+    - POSTGRES_PASSWORD=airflow
+    - POSTGRES_DB=airflow
     ports:
-      - "5433:5432"
+    - 5433:5432
     volumes:
-      - postgres-db-volume:/var/lib/postgresql/data
+    - postgres-db-volume:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U airflow -d airflow"]
+      test:
+      - CMD-SHELL
+      - pg_isready -U airflow -d airflow
       interval: 5s
       timeout: 5s
       retries: 10
       start_period: 5s
     networks:
-      - qimed-network
-
+    - qimed-network
   airflow-init:
-    <<: *airflow-common
-    entrypoint:
-      - bash
-      - -c
-      - |
-        echo "Aguardando PostgreSQL ficar pronto..."
-        airflow db migrate &&
-        airflow users create \
-          --username admin \
-          --firstname admin \
-          --lastname admin \
-          --role Admin \
-          --email admin@example.com \
-          --password admin || true
+    build: .
+    environment: *id001
+    volumes: *id002
+    depends_on: *id003
     networks:
-      - qimed-network
-
+    - qimed-network
+    entrypoint:
+    - bash
+    - -c
+    - "echo \"Aguardando PostgreSQL ficar pronto...\"\nairflow db migrate &&\nairflow\
+      \ users create \\\n  --username admin \\\n  --firstname admin \\\n  --lastname\
+      \ admin \\\n  --role Admin \\\n  --email admin@example.com \\\n  --password\
+      \ admin || true\n"
   airflow-webserver:
-    <<: *airflow-common
-    command: bash -c "rm -f /opt/airflow/airflow-webserver.pid /opt/airflow/airflow-webserver-monitor.pid; airflow webserver"
+    build: .
+    environment: *id001
+    volumes: *id002
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+    networks:
+    - qimed-network
+    command: bash -c "rm -f /opt/airflow/airflow-webserver.pid /opt/airflow/airflow-webserver-monitor.pid;
+      airflow webserver"
     restart: always
     ports:
-      - "8088:8080"
+    - 8088:8080
     healthcheck:
-      test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
+      test:
+      - CMD
+      - curl
+      - --fail
+      - http://localhost:8080/health
       interval: 30s
       timeout: 10s
       retries: 5
       start_period: 30s
+  airflow-scheduler:
+    build: .
+    environment: *id001
+    volumes: *id002
     depends_on:
       airflow-init:
         condition: service_completed_successfully
     networks:
-      - qimed-network
-
-  airflow-scheduler:
-    <<: *airflow-common
+    - qimed-network
     command: airflow scheduler
     restart: on-failure
+  qimed-api:
+    build: .
+    command: uvicorn src.api.main:app --host 0.0.0.0 --port 8000
+    restart: always
+    ports:
+    - 8000:8000
+    volumes:
+    - ./src:/opt/qimed/src
+    - ./lakehouse:/opt/qimed/lakehouse
+    - ./warehouse:/opt/qimed/warehouse
+    environment:
+    - PYTHONPATH=/opt/qimed
+    - AIRFLOW_API_URL=http://airflow-webserver:8080/api/v1
+    - AIRFLOW_API_USER=admin
+    - AIRFLOW_API_PASSWORD=admin
+    - QIMED_DATABASE_URL=postgresql+asyncpg://airflow:airflow@postgres:5432/airflow
     depends_on:
-      airflow-init:
-        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
     networks:
-      - qimed-network
-
+    - qimed-network
 volumes:
-  postgres-db-volume:
-
+  postgres-db-volume: null
 networks:
   qimed-network:
     driver: bridge
