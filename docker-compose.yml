@@ -119,6 +119,9 @@ services:
         condition: service_healthy
     networks:
     - qimed-network
+    entrypoint:
+    - bash
+    - -c
 volumes:
   postgres-db-volume: null
 networks:
