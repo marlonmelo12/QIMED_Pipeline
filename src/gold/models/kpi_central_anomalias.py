@@ -1,7 +1,7 @@
 """
 Central de Anomalias e Auditoria Hospitalar - QIMED Lakehouse V3 (Gold Layer).
-Motor anal?tico para identifica??o de outliers estat?sticos e inconformidades cl?nicas
-com c?lculo do excesso de custo sobre o percentil 90 e gest?o de workflow audit?vel.
+Motor anal?tico para identificação de outliers estatísticos e inconformidades clínicas
+com c?lculo do excesso de custo sobre o percentil 90 e gestão de workflow audit?vel.
 """
 import duckdb
 import pandas as pd
@@ -14,7 +14,7 @@ logger = get_logger(__name__)
 
 def get_central_anomalias_sql(fct_internacao_source: str = "fct_internacao", min_proc_count: int = 5) -> str:
     """
-    Retorna a query SQL DuckDB que computa percentis (P90, P99) e detecta as 3 regras can?nicas de anomalia.
+    Retorna a query SQL DuckDB que computa percentis (P90, P99) e detecta as 3 regras canônicas de anomalia.
     """
     return f"""
     WITH stats_procedimentos AS (
@@ -34,6 +34,7 @@ def get_central_anomalias_sql(fct_internacao_source: str = "fct_internacao", min
         f.numero_aih,
         f.codigo_estabelecimento_cnes,
         f.uf,
+        '2026-05' AS periodo,
         f.codigo_procedimento_realizado,
         'OUTLIER_CUSTO_P99' AS tipo_anomalia,
         'ALTA' AS severidade,
@@ -42,6 +43,7 @@ def get_central_anomalias_sql(fct_internacao_source: str = "fct_internacao", min
         GREATEST(0.0, f.valor_total_brl - s.p90_custo) AS excesso_custo_brl,
         'NOVA' AS status_operacional,
         CURRENT_TIMESTAMP AS data_geracao,
+        CURRENT_TIMESTAMP AS criado_em,
         'v1.0' AS versao_regra
     FROM {fct_internacao_source} f
     JOIN stats_procedimentos s ON f.codigo_procedimento_realizado = s.codigo_procedimento_realizado
@@ -55,6 +57,7 @@ def get_central_anomalias_sql(fct_internacao_source: str = "fct_internacao", min
         f.numero_aih,
         f.codigo_estabelecimento_cnes,
         f.uf,
+        '2026-05' AS periodo,
         f.codigo_procedimento_realizado,
         'AIH_VALOR_ZERO' AS tipo_anomalia,
         'MEDIA' AS severidade,
@@ -63,18 +66,20 @@ def get_central_anomalias_sql(fct_internacao_source: str = "fct_internacao", min
         0.0 AS excesso_custo_brl,
         'NOVA' AS status_operacional,
         CURRENT_TIMESTAMP AS data_geracao,
+        CURRENT_TIMESTAMP AS criado_em,
         'v1.0' AS versao_regra
     FROM {fct_internacao_source} f
     WHERE f.tipo_identificacao_aih = '1' AND (f.valor_total_brl = 0.0 OR f.valor_total_brl IS NULL)
 
     UNION ALL
 
-    -- Regra 3: ?bitos Imediatos / Perman?ncia Zero
+    -- Regra 3: Óbitos Imediatos / Permanência Zero
     SELECT
         md5(concat_ws('-', CAST(f.numero_aih AS VARCHAR), 'OBITO_IMEDIATO')) AS id_alerta,
         f.numero_aih,
         f.codigo_estabelecimento_cnes,
         f.uf,
+        '2026-05' AS periodo,
         f.codigo_procedimento_realizado,
         'OBITO_PERMANENCIA_ZERO' AS tipo_anomalia,
         'CRITICA' AS severidade,
@@ -83,6 +88,7 @@ def get_central_anomalias_sql(fct_internacao_source: str = "fct_internacao", min
         0.0 AS excesso_custo_brl,
         'NOVA' AS status_operacional,
         CURRENT_TIMESTAMP AS data_geracao,
+        CURRENT_TIMESTAMP AS criado_em,
         'v1.0' AS versao_regra
     FROM {fct_internacao_source} f
     WHERE f.indicador_obito = TRUE AND f.dias_permanencia_real = 0
@@ -95,8 +101,8 @@ def build_aud_alertas_anomalias(
     target_table: str = "aud_alertas_anomalias"
 ) -> int:
     """
-    Executa e materializa a tabela f?sica de auditoria aud_alertas_anomalias no DuckDB.
-    Retorna o n?mero de alertas gerados.
+    Executa e materializa a tabela física de auditoria aud_alertas_anomalias no DuckDB.
+    Retorna o número de alertas gerados.
     """
     query = get_central_anomalias_sql(fct_internacao_source=fct_internacao_source)
     sql_create = f"""

@@ -55,8 +55,8 @@ class TestSilverWriter:
         df1 = pd.DataFrame([{"patient_master_id": "mpi_1", "state": "SP"}])
         df2 = pd.DataFrame([{"patient_master_id": "mpi_2", "state": "RJ"}])
 
-        writer._write_table(df1, "dim_patients")
-        writer._write_table(df2, "dim_patients")
+        writer._write_table(df1, "dim_patients", mode="append")
+        writer._write_table(df2, "dim_patients", mode="append")
 
         pat_table_path = os.path.join(silver_tmp_dir, "dim_patients")
         dt = DeltaTable(pat_table_path)

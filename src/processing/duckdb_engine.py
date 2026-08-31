@@ -1,6 +1,6 @@
 """
-DuckDB Engine - Motor de Transforma??o Out-of-Core - QIMED Lakehouse V3.
-Executa consultas e transforma??es diretamente sobre Delta Lake e Parquet via delta_scan/parquet_scan.
+DuckDB Engine - Motor de Transformação Out-of-Core - QIMED Lakehouse V3.
+Executa consultas e transformações diretamente sobre Delta Lake e Parquet via delta_scan/parquet_scan.
 """
 import os
 from typing import Any, Dict, List, Optional
@@ -15,7 +15,7 @@ logger = setup_logger(__name__)
 
 class DuckDBEngine:
     """
-    Gerenciador de conex?es e execu??o SQL out-of-core do DuckDB para transforma??es Lakehouse.
+    Gerenciador de conexões e execução SQL out-of-core do DuckDB para transformações Lakehouse.
     """
 
     def __init__(self, db_path: Optional[str] = None, config: Optional[Dict[str, Any]] = None):
@@ -32,7 +32,7 @@ class DuckDBEngine:
 
     def _configure_engine(self):
         """
-        Configura par?metros de performance, limites de mem?ria e extens?es.
+        Configura parâmetros de performance, limites de memória e extensões.
         """
         self.conn.execute(f"SET memory_limit = '{self.memory_limit}';")
         self.conn.execute(f"SET threads = {self.threads};")
@@ -60,7 +60,7 @@ class DuckDBEngine:
 
     def query(self, sql: str) -> duckdb.DuckDBPyRelation:
         """
-        Executa uma consulta SQL retornando uma rela??o DuckDB lazy.
+        Executa uma consulta SQL retornando uma relação DuckDB lazy.
         """
         return self.conn.sql(sql)
 

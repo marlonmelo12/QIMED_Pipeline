@@ -1,7 +1,7 @@
 """
 DeltaBatchSink - QIMED Lakehouse V3 (Pure PyArrow Zero-Copy Delta Writer).
-Consolida m?ltiplos arquivos de staging Parquet em um commit Delta Lake
-at?mico e idempotente, executando valida??es pr?-commit e compacta??o por cardinalidade,
+Consolida múltiplos arquivos de staging Parquet em um commit Delta Lake
+atômico e idempotente, executando valida??es pré-commit e compactação por cardinalidade,
 sem converter para Pandas.
 """
 import os
@@ -24,7 +24,7 @@ logger = setup_logger(__name__)
 
 class DeltaBatchSink:
     """
-    Sink at?mico para persist?ncia de dados de staging no Delta Lake Bronze.
+    Sink atômico para persistência de dados de staging no Delta Lake Bronze.
     """
 
     def __init__(
@@ -57,7 +57,7 @@ class DeltaBatchSink:
         source_files: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         """
-        Executa a persist?ncia at?mica da parti??o com Lock, Valida??o, Compacta??o e Commit.
+        Executa a persistência atômica da partição com Lock, Validação, Compactação e Commit.
         """
         partition_key = f"{self.subsystem}/{self.year}/{self.month:02d}/{self.uf}"
         start_time = time.time()
@@ -68,7 +68,7 @@ class DeltaBatchSink:
             return {"status": "skipped_empty", "total_rows": 0}
 
         with self.lock_manager.lock(partition_key, execution_id):
-            # 1. Valida??o Pr?-Commit
+            # 1. Validação Pr?-Commit
             validation_res = self.validator.validate_staging_files(staging_files)
             if not validation_res["is_valid"]:
                 err = validation_res.get("error", "Validacao pre-commit falhou")
@@ -88,7 +88,7 @@ class DeltaBatchSink:
 
             total_rows = validation_res["total_rows"]
 
-            # 2. Compacta??o Inteligente por Cardinalidade
+            # 2. Compactação Inteligente por Cardinalidade
             compacted_output_dir = os.path.join(staging_writer.staging_dir, "compacted")
             ready_files = self.compactor.compact_staging_files(staging_files, self.uf, compacted_output_dir)
 
@@ -126,7 +126,7 @@ class DeltaBatchSink:
 
             duration = time.time() - start_time
 
-            # 4. Limpa Staging com Seguran?a
+            # 4. Limpa Staging com Segurança
             staging_writer.cleanup_staging(preserve_on_failure=False)
             if os.path.exists(compacted_output_dir):
                 for cf in ready_files:

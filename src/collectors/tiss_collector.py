@@ -1,6 +1,6 @@
 """
-Conector e Parser de Dados TISS (Troca de Informa??es na Sa?de Suplementar) - QIMED Lakehouse V3.
-Processa demonstrativos de an?lise de contas m?dicas e motivos de glosas privadas
+Conector e Parser de Dados TISS (Troca de Informações na Saúde Suplementar) - QIMED Lakehouse V3.
+Processa demonstrativos de análise de contas médicas e motivos de glosas privadas
 baseadas na Tabela 38 (TUSS / ANS).
 """
 import os
@@ -13,16 +13,16 @@ from src.utils.logging_config import setup_logger
 
 logger = setup_logger(__name__)
 
-# Mapeamento Can?nico da Tabela 38 TUSS / ANS - Motivos de Glosa
+# Mapeamento Canônico da Tabela 38 TUSS / ANS - Motivos de Glosa
 TABELA_38_TUSS_GLOSAS = {
-    "1001": "PACIENTE N?O IDENTIFICADO",
-    "1002": "BENEFICI?RIO COM COBERTURA SUSPENSA",
+    "1001": "PACIENTE NÃO IDENTIFICADO",
+    "1002": "BENEFICIÁRIO COM COBERTURA SUSPENSA",
     "1003": "VALIDADE DA CARTEIRA VENCIDA",
-    "2001": "PROCEDIMENTO N?O COBERTO PELO PLANO",
-    "2005": "PROCEDIMENTO N?O AUTORIZADO PREVIAMENTE",
+    "2001": "PROCEDIMENTO NÃO COBERTO PELO PLANO",
+    "2005": "PROCEDIMENTO NÃO AUTORIZADO PREVIAMENTE",
     "3001": "VALOR COBRADO ACIMA DA TABELA ACORDADA",
-    "4001": "COBRAN?A EM DUPLICIDADE",
-    "5001": "DOCUMENTA??O CL?NICA INSUFICIENTE",
+    "4001": "COBRANÇA EM DUPLICIDADE",
+    "5001": "DOCUMENTAÇÃO CLÍNICA INSUFICIENTE",
 }
 
 
@@ -79,7 +79,7 @@ class TissCollector(BaseCollector):
 
     def parse(self, raw_data: Union[pd.DataFrame, List[Dict[str, Any]], str]) -> pd.DataFrame:
         """
-        Converte demonstrativos brutos (DataFrame, List ou XML) em DataFrame can?nico.
+        Converte demonstrativos brutos (DataFrame, List ou XML) em DataFrame canônico.
         """
         if isinstance(raw_data, list):
             df = pd.DataFrame(raw_data)
@@ -97,7 +97,7 @@ class TissCollector(BaseCollector):
                 "valor_liberado_brl", "ano", "mes"
             ])
 
-        # Enriquecer com descri??es can?nicas da Tabela 38 se faltarem
+        # Enriquecer com descrições canônicas da Tabela 38 se faltarem
         if "codigo_glosa_tuss" in df.columns and "descricao_glosa_tuss" not in df.columns:
             df["descricao_glosa_tuss"] = df["codigo_glosa_tuss"].astype(str).map(TABELA_38_TUSS_GLOSAS).fillna("OUTRAS GLOSAS TUSS")
 

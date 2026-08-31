@@ -1,7 +1,7 @@
 """
 Data Lineage Tracker - Camada Sistema - QIMED Lakehouse V3.
 Rastreia a genealogia ponta a ponta dos dados desde o DATASUS bruto
-at? as tabelas can?nicas Silver e Data Marts Gold em lakehouse/system/lineage.
+at? as tabelas canônicas Silver e Data Marts Gold em lakehouse/system/lineage.
 """
 import os
 import time
@@ -17,7 +17,7 @@ logger = setup_logger(__name__)
 
 class DataLineageTracker:
     """
-    Registra transi??es e transforma??es de linhagem na tabela Delta lakehouse/system/lineage.
+    Registra transições e transformações de linhagem na tabela Delta lakehouse/system/lineage.
     """
 
     def __init__(self, system_dir: Optional[str] = None):
@@ -37,7 +37,7 @@ class DataLineageTracker:
         transformation_rules: Optional[str] = None,
     ):
         """
-        Grava um n? de linhagem na tabela Delta.
+        Grava um nó de linhagem na tabela Delta.
         """
         now_str = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())
         record = {

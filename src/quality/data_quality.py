@@ -1,6 +1,6 @@
 """
 Data Quality Auditor & Clinical Inconsistency Checker - QIMED Lakehouse V3.
-Executa auditoria quantitativa (reconcilia??o de linhas) e cl?nica
+Executa auditoria quantitativa (reconciliação de linhas) e clínica
 com severidades (INFO, WARNING, ERROR) sobre o DuckDB DW.
 """
 import os
@@ -16,7 +16,7 @@ logger = setup_logger(__name__)
 
 class DataQualityAuditor:
     """
-    Auditor forense de qualidade de dados de sa?de.
+    Auditor forense de qualidade de dados de saúde.
     """
 
     def __init__(self, dw_path: Optional[str] = None, config: Optional[Dict[str, Any]] = None):
@@ -46,11 +46,11 @@ class DataQualityAuditor:
                     "severidade": "INFO",
                 })
 
-            # 2. Inconsist?ncia de Valores Negativos
+            # 2. Inconsistência de Valores Negativos
             if "agg_internacoes_uf" in tables:
                 neg = conn.execute("SELECT COUNT(*) FROM agg_internacoes_uf WHERE valor_total_brl < 0").fetchone()[0]
                 findings.append({
-                    "check": "Valores Financeiros Negativos em Interna??es",
+                    "check": "Valores Financeiros Negativos em Internações",
                     "tabela": "agg_internacoes_uf",
                     "resultado": f"{neg} registros com valor negativo",
                     "severidade": "ERROR" if neg > 0 else "INFO",

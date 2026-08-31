@@ -106,7 +106,8 @@ def test_dag_dim_tempo_structure_and_imports():
 def test_dag_master_end_to_end_structure_and_imports():
     assert master_dag.dag_id == "qimed_master_pipeline_end_to_end"
     assert len(master_dag.tasks) == 4
-    task_notify = master_dag.get_task("notify_backend_mirror_trigger")
+    # Verificar nova nomenclatura: pipeline-ready (não mais mirror-trigger)
+    task_notify = master_dag.get_task("notify_backend_pipeline_ready")
     assert task_notify is not None
 
 

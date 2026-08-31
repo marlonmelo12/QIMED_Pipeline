@@ -35,7 +35,7 @@ graph TD
         G1["Data Marts: dm_ans_glosas_operadoras, dm_glosas_auditoria, dm_hospital_efficiency, dm_patient_readmissions, dm_icsap_prevention, dm_regulation_bottlenecks"]
         G2["Central de Alertas & Anomalias Estatísticas (P99)"]
         G3["Views Semânticas Anti-Leakage para Machine Learning"]
-        G4["Notificação Reativa (Webhook POST /api/v1/sync/mirror-trigger)"]
+        G4["Notificação de Pipeline Pronto (Webhook POST /api/v1/pipeline-ready → invalida cache, não espelha)"]
     end
 
     S1 & S2 & S3 & S4 --> B1 --> B2 --> B3
@@ -155,7 +155,7 @@ cp .env.example .env
 |---|:---:|---|---|
 | `QIMED_MPI_SALT` | **SIM** | `openssl rand -hex 32` | Salt HMAC SHA-256 para anonimização e MPI de pacientes. O pipeline aborta se ausente. |
 | `SALT_SECRET` | **SIM** | `openssl rand -hex 32` | Chave de reforço da camada de pseudoanonimização LGPD. |
-| `BACKEND_SYNC_WEBHOOK_URL` | NÃO | `http://localhost:8000/api/v1/sync/mirror-trigger` | Endpoint HTTP POST acionado ao término do pipeline para disparar o espelhamento. |
+| `BACKEND_PIPELINE_READY_WEBHOOK_URL` | NÃO | `http://localhost:8000/api/v1/pipeline-ready` | Endpoint HTTP POST acionado ao término do pipeline. O backend deve **invalidar o cache de dashboards** — NÃO espelhar dados no PostgreSQL (ver ADR-001). |
 | `LAKEHOUSE_PATH` | NÃO | `lakehouse/bronze` | Caminho raiz da Camada Bronze. |
 | `LAKEHOUSE_ROOT` | NÃO | `lakehouse` | Raiz de persistência das camadas Bronze e Silver do Delta Lake. |
 | `WAREHOUSE_PATH` | NÃO | `warehouse` | Diretório onde o arquivo OLAP `qimed_dw.duckdb` é gerado. |

@@ -6,7 +6,6 @@ import os
 import time
 from typing import Dict, Any, Optional
 import pandas as pd
-from deltalake import DeltaTable
 from deltalake.writer import write_deltalake
 
 from src.dw.dw_manager import DataWarehouseManager
@@ -15,7 +14,6 @@ from src.gold.models.kpi_hospital_efficiency import build_dm_hospital_efficiency
 from src.gold.models.kpi_patient_readmissions import build_dm_patient_readmissions
 from src.gold.models.kpi_regulation_bottlenecks import build_dm_regulation_bottlenecks
 from src.gold.models.kpi_icsap_prevention import build_dm_icsap_prevention
-from src.silver.terminology_names import resolver_nome_hospital, resolver_nome_municipio
 from src.utils.logging_config import get_logger
 
 logger = get_logger(__name__)
@@ -44,17 +42,31 @@ class GoldTransformationPipeline:
 
     def _read_delta_safe(self, table_path: str) -> Optional[pd.DataFrame]:
         """
-        Lê com segurança uma tabela Delta Lake se ela existir.
-        Retorna None explícito em caso de erro ou ausência para evitar falhas silenciosas.
+        Lê uma tabela Delta Lake via DuckDB delta_scan, evitando carregar o dado
+        inteiro no heap Python de uma vez.
+
+        [V2-06] ANTES: DeltaTable(path).to_pandas() — materializa toda a tabela
+        na RAM Python antes de qualquer operação.
+        DEPOIS: duckdb.sql(delta_scan(path)) — leitura paralela com spill-to-disk
+        gerenciado internamente pelo DuckDB; pandas recebe só o resultado final.
         """
-        if os.path.exists(table_path):
+        if not os.path.exists(table_path):
+            logger.info(f"[GOLD READ] Tabela nao encontrada: {table_path}")
+            return None
+        try:
+            import duckdb
+            conn = duckdb.connect()
             try:
-                return DeltaTable(table_path).to_pandas()
-            except Exception as e:
-                logger.warning(f"[GOLD READ ERROR] Falha ao ler DeltaTable em {table_path}: {e}")
-                return None
-        logger.info(f"[GOLD READ INFO] Tabela não encontrada em {table_path}")
-        return None
+                conn.execute("LOAD delta;")
+            except Exception:
+                conn.execute("INSTALL delta; LOAD delta;")
+            table_fwd = table_path.replace("\\", "/")
+            df = conn.execute(f"SELECT * FROM delta_scan('{table_fwd}')").df()
+            conn.close()
+            return df
+        except Exception as e:
+            logger.warning(f"[GOLD READ ERROR] Falha ao ler {table_path}: {e}")
+            return None
 
     def _write_gold_delta(self, df: Optional[pd.DataFrame], table_name: str) -> str:
         """Persiste um Data Mart no formato Delta Lake."""
@@ -104,22 +116,36 @@ class GoldTransformationPipeline:
         df_sia = self._read_delta_safe(os.path.join(self.bronze_path, "sia"))
         df_sisab = self._read_delta_safe(os.path.join(self.bronze_path, "sisab"))
 
-        # Enriquecer fct_encounters com nomes de hospitais e municípios dos pacientes
+        # [V2-05] Pré-materializa dicionários de lookup para substituir .apply() linha a linha
+        # por .map(dict) vetorizado em C. Os resolvers são funções escalares (dict lookup interno),
+        # portanto o custo de pré-materializar os únicos CRESs/municípios únicos presentes nos
+        # DataFrames é negligível comparado ao loop Python sobre milhões de linhas.
+        from src.silver.terminology_names import CNES_HOSPITAIS_CEARA, CNES_HOSPITAIS_AC
+        from src.silver.ceara_mappings import IBGE_MUNICIPIOS_CEARA
+
+        # Enriquecer fct_encounters com nomes de hospitais e municípios
         if df_enc is not None and not df_enc.empty:
             df_enc["cnes_raw"] = df_enc["organization_id"].astype(str).str.replace("org_cnes_", "").str.zfill(7)
-            df_enc["hospital_name"] = df_enc["cnes_raw"].apply(resolver_nome_hospital)
-            
+
+            # Lookup de hospital: une Ceará + Acre e usa fallback padrão via .map() + fillna
+            hospital_dict = {**CNES_HOSPITAIS_CEARA, **CNES_HOSPITAIS_AC}
+            df_enc["hospital_name"] = (
+                df_enc["cnes_raw"]
+                .map(hospital_dict)
+                .fillna(df_enc["cnes_raw"].apply(lambda c: f"Hospital CNES [{c}]"))
+            )
+
             # Cruzar com dim_patients para obter município de residência do paciente
             if df_pat is not None and not df_pat.empty and "patient_master_id" in df_pat.columns and "municipality_code" in df_pat.columns:
                 pat_mun_map = df_pat.dropna(subset=["patient_master_id"]).drop_duplicates("patient_master_id").set_index("patient_master_id")["municipality_code"].to_dict()
                 df_enc["municipality_code"] = df_enc["patient_master_id"].map(pat_mun_map)
-                df_enc["municipality_name"] = df_enc["municipality_code"].apply(resolver_nome_municipio).fillna("Fortaleza (Capital)")
+                df_enc["municipality_name"] = df_enc["municipality_code"].map(IBGE_MUNICIPIOS_CEARA).fillna("Fortaleza (Capital)")
             elif "municipality_name" not in df_enc.columns:
                 df_enc["municipality_name"] = "Fortaleza (Capital)"
 
-        # Enriquecer fct_referrals com nomes de municípios
+        # Enriquecer fct_referrals com nomes de municípios via .map() em vez de .apply()
         if df_ref is not None and not df_ref.empty and "municipality_code" in df_ref.columns:
-            df_ref["municipality_name"] = df_ref["municipality_code"].apply(resolver_nome_municipio)
+            df_ref["municipality_name"] = df_ref["municipality_code"].map(IBGE_MUNICIPIOS_CEARA).fillna("Município desconhecido")
 
         # 2. Construção dos 5 Data Marts (com proteção para DataFrames None)
         dm_glosas = build_dm_glosas_auditoria(df_sia, df_cnes) if df_sia is not None or df_cnes is not None else pd.DataFrame()

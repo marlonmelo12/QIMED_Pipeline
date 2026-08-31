@@ -40,12 +40,21 @@ def task_run_gold_pipeline(**context):
 
 
 def task_notify_backend_sync(**context):
+    """
+    Notifica o backend que os Data Marts DuckDB Gold estão prontos para consulta OLAP.
+    O backend deve invalidar cache de dashboards — NÃO espelhar dados no PostgreSQL.
+    """
     from src.observability.webhook_notifier import trigger_sync_webhook
     run_id = str(context.get("run_id", "manual_run"))
     return trigger_sync_webhook(
         dag_id="qimed_gold_aggregation",
         run_id=run_id,
-        tables_ready=["vw_internacoes_consolidadas", "dm_glosas_auditoria", "dm_hospital_efficiency", "aud_alertas_anomalias"],
+        tables_ready=[
+            "vw_internacoes_consolidadas",
+            "dm_glosas_auditoria",
+            "dm_hospital_efficiency",
+            "aud_alertas_anomalias",
+        ],
         status="success",
     )
 
@@ -57,7 +66,7 @@ t_gold_agg = PythonOperator(
 )
 
 t_notify = PythonOperator(
-    task_id="notify_backend_mirror_trigger",
+    task_id="notify_backend_pipeline_ready",
     python_callable=task_notify_backend_sync,
     dag=dag
 )

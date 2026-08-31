@@ -153,8 +153,17 @@ class CanonicalTransformations:
 
             for col in ["razao_social", "nome_fantasia", "modalidade_operadora", "municipio_sede"]:
                 if col in df_op.columns:
-                    df_op[col] = df_op[col].apply(collector._fix_text_mojibake)
-                    df_op[col] = df_op[col].astype(str).str.strip().str.replace(r"\s+", " ", regex=True)
+                    # [V2-08] Substituido .apply(mojibake) por re-encoding vetorizado pandas.
+                    # Mojibake tipico no DATASUS: bytes Latin-1 lidos como UTF-8 de forma errada.
+                    # A correcao: re-codificar como Latin-1 → decodificar como UTF-8.
+                    df_op[col] = (
+                        df_op[col]
+                        .astype(str)
+                        .str.encode("latin-1", errors="replace")
+                        .str.decode("utf-8", errors="replace")
+                        .str.strip()
+                        .str.replace(r"\s+", " ", regex=True)
+                    )
                     df_op.loc[df_op[col].isin(["", "None", "nan", "NULL", "none", "<NA>"]), col] = None
 
             if "modalidade_operadora" in df_op.columns:

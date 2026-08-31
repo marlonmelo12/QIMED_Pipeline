@@ -20,6 +20,13 @@ from src.collectors.base import BaseCollector
 from src.utils.logging_config import setup_logger
 from src.utils.config_loader import load_pipeline_config
 
+# Drift detection: importado de forma lazy para não bloquear ambientes sem pydantic
+try:
+    from src.quality.schema_drift_detector import SchemaDriftDetector, SchemaContractViolation
+    _DRIFT_DETECTOR_AVAILABLE = True
+except ImportError:
+    _DRIFT_DETECTOR_AVAILABLE = False
+
 logger = setup_logger(__name__)
 
 
@@ -74,6 +81,8 @@ class DatasusCollector(BaseCollector):
         max_records: Optional[int] = None,
         cache_dir: Optional[str] = None,
         config: Optional[Dict[str, Any]] = None,
+        validate_schema: bool = True,
+        schema_probe_rows: int = 200,
         **kwargs: Any,
     ):
         super().__init__()
@@ -93,6 +102,19 @@ class DatasusCollector(BaseCollector):
         self.ano_2d = f"{self.year % 100:02d}"
         self.mes_2d = f"{self.month:02d}"
         self.base_filename_stem = f"{self.FILE_PREFIXES[self.subsystem]}{self.uf}{self.ano_2d}{self.mes_2d}"
+
+        # Drift detector: inspeciona o primeiro batch para fail-fast em mudanças de layout
+        self._drift_detector: Optional[SchemaDriftDetector] = None
+        if validate_schema and _DRIFT_DETECTOR_AVAILABLE:
+            self._drift_detector = SchemaDriftDetector(
+                probe_rows=schema_probe_rows,
+                strict_mode=True,
+            )
+        elif validate_schema and not _DRIFT_DETECTOR_AVAILABLE:
+            logger.warning(
+                "[DRIFT] pydantic nao instalado — validacao de schema desabilitada. "
+                "Instale com: pip install pydantic>=2"
+            )
 
     def get_remote_filename(self) -> str:
         """
@@ -227,6 +249,10 @@ class DatasusCollector(BaseCollector):
     def parse_record_batches(self, raw_data: Any, chunksize: int = 100000) -> Generator[pa.RecordBatch, None, None]:
         """
         Streaming Generator: Le o DBF em blocos e produz Arrow RecordBatches fortemente tipados.
+
+        No PRIMEIRO batch gerado, executa validação de schema drift antes de emitir o dado
+        para o staging. Se o layout da fonte tiver mudado de forma incompatível, lança
+        SchemaContractViolation antes de qualquer escrita em disco.
         """
         file_path = str(raw_data)
         dbf_path = self._ensure_dbf_decompressed(file_path)
@@ -234,6 +260,7 @@ class DatasusCollector(BaseCollector):
         table = DBF(dbf_path, encoding="iso-8859-1", load=False, ignore_missing_memofile=True)
         batch_records = []
         total_parsed = 0
+        _first_batch_validated = False
 
         for record in table:
             batch_records.append(record)
@@ -246,6 +273,19 @@ class DatasusCollector(BaseCollector):
                 df_chunk = pd.DataFrame(batch_records)
                 df_chunk.columns = [str(col).upper().strip() for col in df_chunk.columns]
                 batch_arrow = pa.RecordBatch.from_pandas(df_chunk, preserve_index=False)
+
+                # Hook de drift detection: roda uma única vez no primeiro batch
+                if not _first_batch_validated and self._drift_detector is not None:
+                    # SchemaContractViolation propaga para o orquestrador — não é capturada aqui.
+                    self._drift_detector.validate_batch(
+                        batch=batch_arrow,
+                        subsystem=self.subsystem,
+                        uf=self.uf,
+                        year=self.year,
+                        month=self.month,
+                    )
+                    _first_batch_validated = True
+
                 yield batch_arrow
                 batch_records = []
                 del df_chunk
@@ -254,6 +294,17 @@ class DatasusCollector(BaseCollector):
             df_chunk = pd.DataFrame(batch_records)
             df_chunk.columns = [str(col).upper().strip() for col in df_chunk.columns]
             batch_arrow = pa.RecordBatch.from_pandas(df_chunk, preserve_index=False)
+
+            # Hook de drift: se o arquivo inteiro couber em um único batch < chunksize
+            if not _first_batch_validated and self._drift_detector is not None:
+                self._drift_detector.validate_batch(
+                    batch=batch_arrow,
+                    subsystem=self.subsystem,
+                    uf=self.uf,
+                    year=self.year,
+                    month=self.month,
+                )
+
             yield batch_arrow
             del df_chunk
 

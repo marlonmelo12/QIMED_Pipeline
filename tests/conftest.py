@@ -12,6 +12,52 @@ import tempfile
 # Garante que a raiz do projeto esteja no PYTHONPATH
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import types
+
+# Se airflow não estiver instalado no ambiente de desenvolvimento local, registra mocks leves
+if "airflow" not in sys.modules:
+    try:
+        import airflow
+    except ImportError:
+        airflow_mock = types.ModuleType("airflow")
+        
+        class MockDAG:
+            def __init__(self, dag_id, *args, **kwargs):
+                self.dag_id = dag_id
+                self.tasks = []
+            def add_task(self, task):
+                self.tasks.append(task)
+            def get_task(self, task_id):
+                for t in self.tasks:
+                    if t.task_id == task_id:
+                        return t
+                return None
+            def __enter__(self):
+                return self
+            def __exit__(self, *args):
+                pass
+                
+        class MockPythonOperator:
+            def __init__(self, task_id, python_callable, dag=None, *args, **kwargs):
+                self.task_id = task_id
+                self.python_callable = python_callable
+                if dag:
+                    dag.add_task(self)
+            def __rshift__(self, other):
+                return other
+            def __lshift__(self, other):
+                return other
+
+        airflow_mock.DAG = MockDAG
+        operators_mod = types.ModuleType("airflow.operators")
+        python_op_mod = types.ModuleType("airflow.operators.python")
+        python_op_mod.PythonOperator = MockPythonOperator
+        operators_mod.python = python_op_mod
+        
+        sys.modules["airflow"] = airflow_mock
+        sys.modules["airflow.operators"] = operators_mod
+        sys.modules["airflow.operators.python"] = python_op_mod
+
 # Garante secrets de teste padrão para o pipeline e MPI
 os.environ.setdefault("QIMED_MPI_SALT", "test_salt_secret_1234567890abcdef1234567890abcdef")
 os.environ.setdefault("SALT_SECRET", "test_salt_secret_1234567890abcdef1234567890abcdef")

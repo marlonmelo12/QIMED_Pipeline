@@ -86,6 +86,8 @@ catalog.json
 !.env.example
 *.pem
 *.key
+docs/
+
 
 # --- 6. IDEs & Sistema Operacional ---
 .idea/

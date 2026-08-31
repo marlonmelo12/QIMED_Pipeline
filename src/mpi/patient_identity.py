@@ -26,7 +26,7 @@ logger = setup_logger(__name__)
 
 class PatientIdentityResolver:
     """
-    Resolvedor vetorizado de identidades e pseudonimiza??o em conformidade com a LGPD.
+    Resolvedor vetorizado de identidades e pseudonimização em conformidade com a LGPD.
     """
 
     def __init__(self, duck_engine: Optional[DuckDBEngine] = None, config: Optional[Dict[str, Any]] = None):
@@ -140,7 +140,7 @@ class PatientIdentityResolver:
 
     def apply_vectorized_resolution(self, table_name: str) -> pa.Table:
         """
-        Aplica a resolu??o de MPI vetorizada sobre uma tabela j? carregada no DuckDB.
+        Aplica a resolução de MPI vetorizada sobre uma tabela já carregada no DuckDB.
         """
         query_sql = self.resolve_identities_sql(f"SELECT * FROM {table_name}")
         return self.engine.fetch_arrow(query_sql)

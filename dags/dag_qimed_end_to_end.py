@@ -1,7 +1,8 @@
 """
-DAG Master End-to-End do QIMED DataQore: Download -> Bronze -> Silver -> Gold.
-Orquestra o download real dos arquivos do DATASUS (SIH, SIA, CNES) para todos os 27 estados (Julho),
-persistencia em Delta Lake e geracao dos Data Marts no Data Warehouse.
+DAG Master End-to-End do QIMED Lakehouse: Download -> Bronze -> Silver -> Gold.
+Orquestra a ingestão de dados, persistência em Delta Lake, transformação canônica
+e geração dos Data Marts no Data Warehouse.
+Inclui Callbacks de Observabilidade (on_success / on_failure) e avanço atômico de watermarks.
 """
 from datetime import datetime, timedelta
 import os
@@ -9,6 +10,12 @@ from airflow import DAG
 from airflow.operators.python import PythonOperator
 
 from src.utils.logging_config import get_logger
+from src.observability.airflow_callbacks import (
+    on_dag_success_callback,
+    on_dag_failure_callback,
+    advance_pipeline_watermark,
+)
+from src.metadata.models import IngestionStrategy
 
 logger = get_logger("dag_qimed_end_to_end")
 
@@ -20,6 +27,7 @@ default_args = {
     "email_on_retry": False,
     "retries": 2,
     "retry_delay": timedelta(minutes=3),
+    "on_failure_callback": on_dag_failure_callback,
 }
 
 dag = DAG(
@@ -28,7 +36,9 @@ dag = DAG(
     description="Pipeline Completo: Download DATASUS 27 Estados (Julho) -> Bronze -> Silver -> Gold DW",
     schedule_interval="@monthly",
     catchup=False,
-    tags=["datasus", "lakehouse", "bronze", "silver", "gold", "dw"]
+    tags=["datasus", "lakehouse", "bronze", "silver", "gold", "dw"],
+    on_success_callback=on_dag_success_callback,
+    on_failure_callback=on_dag_failure_callback,
 )
 
 
@@ -40,7 +50,7 @@ def task_download_and_ingest_bronze(**context):
     """
     from src.pipeline.master_pipeline import QimedMasterPipeline
     pipeline = QimedMasterPipeline()
-    execution_date = context["data_interval_start"]
+    execution_date = context.get("data_interval_start") or datetime.now()
     target_year = execution_date.year
     target_month = execution_date.month
     logger.info(f"Iniciando download DATASUS para {target_month:02d}/{target_year} (27 estados)...")
@@ -70,7 +80,7 @@ def task_process_gold_and_dw(**context):
     """
     from src.pipeline.master_pipeline import QimedMasterPipeline
     pipeline = QimedMasterPipeline()
-    execution_date = context["data_interval_start"]
+    execution_date = context.get("data_interval_start") or datetime.now()
     target_year = execution_date.year
     target_month = execution_date.month
     logger.info(f"Iniciando agregacao Gold para {target_month:02d}/{target_year}...")
@@ -79,12 +89,32 @@ def task_process_gold_and_dw(**context):
     return res
 
 
-def task_notify_backend_sync(**context):
+def task_commit_watermark_and_notify(**context):
     """
-    Dispara notificação reativa via Webhook para o backend da aplicação iniciar o espelhamento.
+    Task Final Atômica:
+    1. Avança atomicamente o watermark (pipeline_state) SOMENTE após o sucesso confirmado de Bronze, Silver e Gold.
+    2. Notifica o backend via webhook informando que os Data Marts estão disponíveis.
     """
-    from src.observability.webhook_notifier import trigger_sync_webhook
+    execution_date = context.get("data_interval_start") or datetime.now()
+    target_year = execution_date.year
+    target_month = execution_date.month
+    new_watermark = f"{target_year:04d}-{target_month:02d}"
     run_id = str(context.get("run_id", "manual_run"))
+
+    # 1. Avanço Atômico do Watermark no PostgreSQL Control Plane (Regras 16, 21 e 35)
+    advance_pipeline_watermark(
+        pipeline_id="qimed_master_pipeline_end_to_end",
+        connection_id="datasus_ftp",
+        source="datasus",
+        entity="master_lakehouse",
+        new_watermark=new_watermark,
+        run_id=run_id,
+        context=context,
+        strategy=IngestionStrategy.TIMESTAMP
+    )
+
+    # 2. Notificação do Backend
+    from src.observability.webhook_notifier import trigger_sync_webhook
     return trigger_sync_webhook(
         dag_id="qimed_master_pipeline_end_to_end",
         run_id=run_id,
@@ -93,8 +123,8 @@ def task_notify_backend_sync(**context):
             "dm_glosas_auditoria",
             "dm_hospital_efficiency",
             "dm_patient_readmissions",
-            "aud_alertas_anomalias",
             "dm_ans_glosas_operadoras",
+            "aud_alertas_anomalias",
         ],
         status="success",
     )
@@ -119,8 +149,8 @@ t_gold = PythonOperator(
 )
 
 t_notify = PythonOperator(
-    task_id="notify_backend_mirror_trigger",
-    python_callable=task_notify_backend_sync,
+    task_id="notify_backend_pipeline_ready",
+    python_callable=task_commit_watermark_and_notify,
     dag=dag
 )
 

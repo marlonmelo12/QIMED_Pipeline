@@ -1,7 +1,7 @@
 """
 Delta Manifest Manager - Camada Sistema - QIMED Lakehouse V3.
-Armazena o hist?rico transacional de ingest?o na tabela Delta Lake lakehouse/system/manifest,
-permitindo consultas anal?ticas via DuckDB/SQL, auditoria forense e recupera??o inteligente (Recovery).
+Armazena o histórico transacional de ingestão na tabela Delta Lake lakehouse/system/manifest,
+permitindo consultas analíticas via DuckDB/SQL, auditoria forense e recuperação inteligente (Recovery).
 """
 import os
 import time
@@ -18,7 +18,7 @@ logger = setup_logger(__name__)
 
 class DeltaManifestManager:
     """
-    Gerencia o manifesto de ingest?o na tabela Delta lakehouse/system/manifest.
+    Gerencia o manifesto de ingestão na tabela Delta lakehouse/system/manifest.
     """
 
     def __init__(self, system_dir: Optional[str] = None):
@@ -29,7 +29,7 @@ class DeltaManifestManager:
 
     def is_partition_committed(self, subsystem: str, year: int, month: int, uf: str) -> bool:
         """
-        Verifica se a parti??o j? foi commitada com sucesso no Delta Lake para permitir Recovery.
+        Verifica se a partição já foi commitada com sucesso no Delta Lake para permitir Recovery.
         """
         if not os.path.exists(self.manifest_table_path) or not os.path.exists(os.path.join(self.manifest_table_path, "_delta_log")):
             return False

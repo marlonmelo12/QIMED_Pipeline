@@ -1,5 +1,5 @@
 """
-Carregador de configura??o centralizada YAML para o QIMED Lakehouse V3.
+Carregador de configuração centralizada YAML para o QIMED Lakehouse V3.
 """
 import os
 from typing import Any, Dict
@@ -41,7 +41,7 @@ def load_pipeline_config(config_path: str = None) -> Dict[str, Any]:
 
 def get_config_value(section: str, key: str, default: Any = None) -> Any:
     """
-    Obt?m um valor espec?fico da configura??o de forma segura.
+    Obtém um valor espec?fico da configuração de forma segura.
     """
     cfg = load_pipeline_config()
     return cfg.get(section, {}).get(key, default)

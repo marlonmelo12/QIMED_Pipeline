@@ -1,6 +1,6 @@
 """
 Observabilidade e Telemetria em Tempo Real - QIMED Lakehouse V3.
-Mede o consumo real de mem?ria RAM (peak RSS) via psutil, uso de CPU e throughput de linhas/segundo.
+Mede o consumo real de memória RAM (peak RSS) via psutil, uso de CPU e throughput de linhas/segundo.
 """
 import os
 import time
@@ -29,7 +29,7 @@ class MetricsCollector:
 
     def get_current_metrics(self) -> Dict[str, Any]:
         """
-        Obt?m m?tricas instant?neas reais do processo.
+        Obtém métricas instant?neas reais do processo.
         """
         mem_info = self.process.memory_info()
         rss_mb = mem_info.rss / (1024 * 1024)
@@ -50,7 +50,7 @@ class MetricsCollector:
         peak_rss_mb: float,
     ):
         """
-        Registra as m?tricas de um est?gio na tabela Delta de m?tricas.
+        Registra as métricas de um estágio na tabela Delta de métricas.
         """
         rows_per_sec = round(rows_processed / max(0.001, duration_seconds), 1)
         now_str = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())

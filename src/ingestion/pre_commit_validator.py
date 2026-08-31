@@ -1,7 +1,7 @@
 """
 Pre-Commit Validator - QIMED Lakehouse V3.
-Garante integridade de schema, contagem de linhas, colunas obrigat?rias
-e consist?ncia m?nima antes de autorizar a grava??o no Delta Lake.
+Garante integridade de schema, contagem de linhas, colunas obrigatórias
+e consistência mínima antes de autorizar a gravação no Delta Lake.
 """
 import os
 import hashlib
@@ -15,7 +15,7 @@ logger = setup_logger(__name__)
 
 class PreCommitValidator:
     """
-    Validador pr?-commit para a camada Bronze/Staging.
+    Validador pré-commit para a camada Bronze/Staging.
     """
 
     MANDATORY_COLUMNS = {
@@ -59,7 +59,7 @@ class PreCommitValidator:
             col_names = set(schema.names)
             detected_columns.update(col_names)
 
-            # Valida colunas obrigat?rias
+            # Valida colunas obrigatórias
             required = self.MANDATORY_COLUMNS.get(self.subsystem, [])
             for req in required:
                 if req not in col_names:

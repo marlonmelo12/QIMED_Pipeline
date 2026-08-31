@@ -1,7 +1,7 @@
 """
 Partition Lock Manager - QIMED Lakehouse V3.
-Gerencia exclus?o m?tua e locks at?micos de parti??o para evitar
-corrup??o de dados por execu??es concorrentes simult?neas.
+Gerencia exclusão mútua e locks atômicos de partição para evitar
+corrupção de dados por execuções concorrentes simultâneas.
 """
 import os
 import time
@@ -17,7 +17,7 @@ logger = setup_logger(__name__)
 
 class PartitionLockManager:
     """
-    Gerenciador de locks at?micos por parti??o l?gica (ex: SIA/2026/05/MG).
+    Gerenciador de locks atômicos por partição lógica (ex: SIA/2026/05/MG).
     """
 
     def __init__(self, locks_dir: Optional[str] = None, timeout_seconds: int = 1800):
@@ -67,22 +67,29 @@ class PartitionLockManager:
                     )
                     return False
                 else:
-                    logger.warning(f"[LOCK EXPIRED] Lock da particao {partition_key} expirou (> {self.timeout_seconds}s). Liberando...")
+                    # [V2-07] Janela de race fechada: escreve em arquivo temporario
+                    # e substitui o lock expirado de forma atomica via os.replace().
+                    # os.replace() e atomico em Windows e Unix — nao ha janela entre
+                    # remover o antigo e criar o novo como havia com os.remove + O_EXCL.
+                    import tempfile
                     try:
-                        os.remove(lock_path)
+                        tmp_fd, tmp_path = tempfile.mkstemp(dir=self.locks_dir, prefix=".lock_tmp_")
+                        try:
+                            with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
+                                json.dump(payload, f)
+                            os.replace(tmp_path, lock_path)
+                            logger.info(f"[LOCK ACQUIRED] Lock renovado atomicamente para {partition_key} (execucao: {execution_id}).")
+                            return True
+                        except Exception:
+                            # Limpar temp se replace falhar
+                            try:
+                                os.remove(tmp_path)
+                            except OSError:
+                                pass
+                            raise
                     except Exception:
-                        pass
-                    
-                    # Tenta adquirir atomicamente após remoção do lock expirado
-                    try:
-                        fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-                        with os.fdopen(fd, "w", encoding="utf-8") as f:
-                            json.dump(payload, f)
-                        logger.info(f"[LOCK ACQUIRED] Lock obtido para {partition_key} (execucao: {execution_id}).")
-                        return True
-                    except FileExistsError:
                         logger.warning(
-                            f"[LOCK RACE] Outro processo adquiriu o lock da particao {partition_key} concorrentemente."
+                            f"[LOCK RACE] Outro processo adquiriu o lock de {partition_key} concorrentemente."
                         )
                         return False
             except Exception as e:
@@ -94,7 +101,7 @@ class PartitionLockManager:
 
     def release_lock(self, partition_key: str, execution_id: str):
         """
-        Libera o lock da parti??o de forma segura.
+        Libera o lock da partição de forma segura.
         """
         lock_path = self._get_lock_filepath(partition_key)
         if os.path.exists(lock_path):

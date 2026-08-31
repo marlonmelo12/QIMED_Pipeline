@@ -32,8 +32,19 @@ class ClinicalInferenceGuardrails:
         Sanitiza predições brutas da API aplicando guardrails de consistência biológica.
         """
         sexo = str(payload_entrada.get("sexo_biologico", "")).strip().upper()
-        cid = str(payload_entrada.get("codigo_cid10_principal", "")).strip().upper()
+
+        # [V2-04] Verificar CID antes de str() para evitar que None -> "NONE"
+        # passe silenciosamente pelo guardrail sem acionar nenhum alerta.
+        cid_raw = payload_entrada.get("codigo_cid10_principal")
         predicao_ajustada = predicao_bruta.copy()
+
+        _CID_VAZIOS = {"", "NONE", "NAN", "<NA>", "N/A", "NA", "0000", "NULL"}
+        if cid_raw is None or str(cid_raw).strip().upper() in _CID_VAZIOS:
+            predicao_ajustada["alerta_clinico"] = "CID_AUSENTE_GUARDRAIL_INAPLICAVEL"
+            predicao_ajustada["confiabilidade_predicao"] = "BAIXA_SEM_DIAGNOSTICO"
+            return predicao_ajustada
+
+        cid = str(cid_raw).strip().upper()
 
         # Regra 1: Homens com CIDs puramente obstétricos/ginecológicos
         if sexo == "M":

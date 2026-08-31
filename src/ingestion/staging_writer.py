@@ -1,7 +1,7 @@
 """
 Parquet Staging Writer com Bounded Queue Real (Backpressure) - QIMED Lakehouse V3.
-Implementa o padr?o Producer-Consumer com fila limitada (maxsize=3)
-para desacoplar a descompress?o LZO/parsing de DBC do I/O de disco em Parquet.
+Implementa o padrão Producer-Consumer com fila limitada (maxsize=3)
+para desacoplar a descompressão LZO/parsing de DBC do I/O de disco em Parquet.
 """
 import os
 import queue
@@ -56,7 +56,7 @@ class ParquetStagingWriter:
 
     def write_batch(self, batch: pa.RecordBatch) -> str:
         """
-        Grava um RecordBatch no disco e libera a mem?ria do batch imediatamente.
+        Grava um RecordBatch no disco e libera a memória do batch imediatamente.
         """
         self.part_counter += 1
         filename = f"part-{self.part_counter:06d}.parquet"
