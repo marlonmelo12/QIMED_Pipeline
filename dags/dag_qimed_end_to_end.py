@@ -50,9 +50,18 @@ def task_download_and_ingest_bronze(**context):
     """
     from src.pipeline.master_pipeline import QimedMasterPipeline
     pipeline = QimedMasterPipeline()
-    execution_date = context.get("data_interval_start") or datetime.now()
-    target_year = execution_date.year
-    target_month = execution_date.month
+    # Tenta ler o watermark injetado via Trigger API (ex: "2026-05")
+    conf = context.get("dag_run").conf if context.get("dag_run") else {}
+    watermark_str = conf.get("watermark") if conf else None
+    
+    if watermark_str and len(watermark_str) == 7:
+        target_year = int(watermark_str[:4])
+        target_month = int(watermark_str[5:7])
+    else:
+        # Fallback para o agendador padrão do Airflow
+        execution_date = context.get("data_interval_start") or datetime.now()
+        target_year = execution_date.year
+        target_month = execution_date.month
     logger.info(f"Iniciando download DATASUS para {target_month:02d}/{target_year} (27 estados)...")
     res = pipeline.execute_bronze_ingestion(target_month=target_month, target_year=target_year)
     logger.info(f"Camada Bronze persistida com sucesso: {res}")
@@ -80,9 +89,18 @@ def task_process_gold_and_dw(**context):
     """
     from src.pipeline.master_pipeline import QimedMasterPipeline
     pipeline = QimedMasterPipeline()
-    execution_date = context.get("data_interval_start") or datetime.now()
-    target_year = execution_date.year
-    target_month = execution_date.month
+    # Tenta ler o watermark injetado via Trigger API (ex: "2026-05")
+    conf = context.get("dag_run").conf if context.get("dag_run") else {}
+    watermark_str = conf.get("watermark") if conf else None
+    
+    if watermark_str and len(watermark_str) == 7:
+        target_year = int(watermark_str[:4])
+        target_month = int(watermark_str[5:7])
+    else:
+        # Fallback para o agendador padrão do Airflow
+        execution_date = context.get("data_interval_start") or datetime.now()
+        target_year = execution_date.year
+        target_month = execution_date.month
     logger.info(f"Iniciando agregacao Gold para {target_month:02d}/{target_year}...")
     res = pipeline.execute_gold_aggregation(target_month=target_month, target_year=target_year)
     logger.info(f"Camada Gold e Data Warehouse concluidos: {res}")
@@ -95,9 +113,18 @@ def task_commit_watermark_and_notify(**context):
     1. Avança atomicamente o watermark (pipeline_state) SOMENTE após o sucesso confirmado de Bronze, Silver e Gold.
     2. Notifica o backend via webhook informando que os Data Marts estão disponíveis.
     """
-    execution_date = context.get("data_interval_start") or datetime.now()
-    target_year = execution_date.year
-    target_month = execution_date.month
+    # Tenta ler o watermark injetado via Trigger API (ex: "2026-05")
+    conf = context.get("dag_run").conf if context.get("dag_run") else {}
+    watermark_str = conf.get("watermark") if conf else None
+    
+    if watermark_str and len(watermark_str) == 7:
+        target_year = int(watermark_str[:4])
+        target_month = int(watermark_str[5:7])
+    else:
+        # Fallback para o agendador padrão do Airflow
+        execution_date = context.get("data_interval_start") or datetime.now()
+        target_year = execution_date.year
+        target_month = execution_date.month
     new_watermark = f"{target_year:04d}-{target_month:02d}"
     run_id = str(context.get("run_id", "manual_run"))
 

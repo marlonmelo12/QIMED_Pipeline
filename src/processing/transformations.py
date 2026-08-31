@@ -468,7 +468,6 @@ class CanonicalTransformations:
                 --   PA_PROC_ID = procedimento SIGTAP
                 --   PA_CMP     = competencia (AAAAMM) do atendimento
                 --   PA_MUNPCN  = municipio de residencia do paciente
-                --   PA_CNS_PAC = Cartao Nacional de Saude (anonimizado na fonte)
                 --   PA_SEXO    = sexo biologico
                 --   PA_IDADE   = idade (discrimina atendimentos identicos no mesmo dia)
                 sha256(concat_ws('-',
@@ -476,7 +475,6 @@ class CanonicalTransformations:
                     COALESCE(TRY_CAST(PA_PROC_ID AS VARCHAR), ''),
                     COALESCE(TRY_CAST(PA_CMP     AS VARCHAR), {dtocor_expr}),
                     COALESCE(TRY_CAST(PA_MUNPCN  AS VARCHAR), ''),
-                    COALESCE(TRY_CAST(PA_CNS_PAC AS VARCHAR), ''),
                     COALESCE(TRY_CAST(PA_SEXO    AS VARCHAR), ''),
                     COALESCE(TRY_CAST(PA_IDADE   AS VARCHAR), '')
                 )) AS id_atendimento_ambulatorial,
