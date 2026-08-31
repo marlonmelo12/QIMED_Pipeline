@@ -1,5 +1,3 @@
-version: '3.8'
-
 x-airflow-common:
   &airflow-common
   build: .
@@ -16,6 +14,7 @@ x-airflow-common:
     - LAKEHOUSE_ROOT=/opt/qimed/lakehouse
     - WAREHOUSE_PATH=/opt/qimed/warehouse
     - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    - AIRFLOW__API__AUTH_BACKENDS=airflow.api.auth.backend.basic_auth,airflow.api.auth.backend.session
   volumes:
     - ./dags:/opt/qimed/dags
     - ./src:/opt/qimed/src
@@ -31,21 +30,6 @@ x-airflow-common:
     - qimed-network
 
 services:
-  # ──────────────────────────────────────────────────────────────────
-  # PostgreSQL — Escopo OLTP Exclusivo (ADR-001)
-  # ──────────────────────────────────────────────────────────────────
-  # Este serviço PostgreSQL existe EXCLUSIVAMENTE como backend do Airflow:
-  #   - Metastore de DAGs, TaskInstances e XComs do Airflow
-  #   - Autenticação e sessões do Airflow Web UI
-  #   - Logs de execução de DAGs
-  #
-  # NÃO ARMAZENA dados analíticos (tabelas dm_*, fct_*, dim_*).
-  # A ÚNICA fonte da verdade para OLAP é:
-  #   warehouse/qimed_dw.duckdb  (DuckDB Gold)
-  #
-  # Qualquer tentativa de espelhar tabelas Gold no PostgreSQL viola
-  # o ADR-001 e causará Split-Brain (divergência de dados por watermark lag).
-  # ──────────────────────────────────────────────────────────────────
   postgres:
     image: postgres:13
     restart: always
