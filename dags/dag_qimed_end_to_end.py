@@ -61,9 +61,19 @@ def task_download_and_ingest_bronze(**context):
         # Fallback para o agendador padrão do Airflow
         execution_date = context.get("data_interval_start") or datetime.now()
         target_year = execution_date.year
-        target_month = execution_date.month
     logger.info(f"Iniciando download DATASUS para {target_month:02d}/{target_year} (27 estados)...")
-    res = pipeline.execute_bronze_ingestion(target_month=target_month, target_year=target_year)
+    
+    dag_run = context.get("dag_run")
+    ti = context.get("task_instance") or context.get("ti")
+    run_id = dag_run.run_id if dag_run else f"run_{int(datetime.now().timestamp())}"
+    try_num = getattr(ti, "try_number", 1) if ti else 1
+    exec_id = f"airflow__qimed_master_pipeline_end_to_end__{run_id}__bronze__try{try_num}__{os.getpid()}"
+
+    res = pipeline.execute_bronze_ingestion(
+        target_month=target_month,
+        target_year=target_year,
+        execution_id=exec_id,
+    )
     logger.info(f"Camada Bronze persistida com sucesso: {res}")
     return res
 

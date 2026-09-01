@@ -1,4 +1,4 @@
-﻿"""
+"""
 Módulo de Callbacks e Gerenciamento Atômico de Watermark do Airflow — QIMED Lakehouse.
 Responsável por:
 1. Notificar o backend sobre mudanças no ciclo de vida de jobs (RUNNING, SUCCEEDED, FAILED);
@@ -7,14 +7,38 @@ Responsável por:
 """
 import os
 import time
+from collections.abc import Mapping
 import requests
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 from src.utils.logging_config import setup_logger
 from src.metadata.models import IngestionStrategy, JobStatus
 
 logger = setup_logger(__name__)
 
 DEFAULT_STATUS_WEBHOOK_URL = "http://localhost:8000/api/v1/pipeline/status"
+
+
+def _extract_qimed_job_context(context: Dict[str, Any]) -> Tuple[Optional[str], Optional[str]]:
+    """
+    Extrai com segurança `qimed_job_id` e `qimed_run_id` a partir de `dag_run.conf` (Mapping).
+    Garante que jamais utilize `context['conf']` (que no Airflow é o AirflowConfigParser).
+    Retorna (None, None) caso a DAG seja agendada ou `dag_run.conf` esteja ausente/vazio.
+    """
+    if not isinstance(context, dict):
+        return None, None
+
+    dag_run = context.get("dag_run")
+    if dag_run and hasattr(dag_run, "conf"):
+        conf = dag_run.conf
+        if isinstance(conf, Mapping):
+            return conf.get("qimed_job_id"), conf.get("qimed_run_id")
+
+    # Fallback apenas se dag_run_conf for injetado explicitamente como Mapping no context (ex: mocks)
+    raw_dag_run_conf = context.get("dag_run_conf")
+    if isinstance(raw_dag_run_conf, Mapping):
+        return raw_dag_run_conf.get("qimed_job_id"), raw_dag_run_conf.get("qimed_run_id")
+
+    return None, None
 
 
 def notify_job_status_to_backend(
@@ -35,15 +59,14 @@ def notify_job_status_to_backend(
     Notifica o backend sobre o status real da execução de uma DAG / Task do Airflow.
     Repassa o watermark para persistência atômica no PostgreSQL Control Plane.
     """
-    dag = context.get("dag")
-    dag_id = dag.dag_id if dag else str(context.get("dag_id", "unknown_dag"))
+    dag = context.get("dag") if isinstance(context, dict) else None
+    dag_id = dag.dag_id if dag else str(context.get("dag_id", "unknown_dag") if isinstance(context, dict) else "unknown_dag")
     
-    dag_run = context.get("dag_run")
-    run_id = dag_run.run_id if dag_run else str(context.get("run_id", "unknown_run"))
+    dag_run = context.get("dag_run") if isinstance(context, dict) else None
+    run_id = dag_run.run_id if dag_run else str(context.get("run_id", "unknown_run") if isinstance(context, dict) else "unknown_run")
     
-    conf = (dag_run.conf if dag_run and hasattr(dag_run, "conf") and dag_run.conf else context.get("conf", {})) or {}
-    qimed_job_id = conf.get("qimed_job_id")
-    qimed_run_id = conf.get("qimed_run_id")
+    qimed_job_id, qimed_run_id = _extract_qimed_job_context(context)
+
 
     task_instance = context.get("task_instance") or context.get("ti")
     duration = 0.0

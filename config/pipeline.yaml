@@ -3,28 +3,40 @@ pipeline:
   version: "3.0.0"
   target_competency:
     year: 2026
-    month: 5
+    month: 3
 
 paths:
-  lakehouse_root: "lakehouse"
+  lakehouse_root: "s3://qimed-lakehouse"
   warehouse_root: "warehouse"
   cache_dir: "lakehouse/cache/datasus"
   staging_dir: "lakehouse/staging"
   system_dir: "lakehouse/system"
-  bronze_dir: "lakehouse/bronze"
-  silver_dir: "lakehouse/silver"
+  bronze_dir: "s3://qimed-lakehouse/bronze"
+  silver_dir: "s3://qimed-lakehouse/silver"
   gold_dw_file: "warehouse/qimed_dw.duckdb"
   temp_duckdb_dir: "lakehouse/temp_duckdb"
 
+storage:
+  backend: "s3"
+  s3_bucket: "qimed-lakehouse"
+  s3_endpoint_url: "http://localhost:9000"
+
+# -----------------------------------------------------------------------------
+# FASE 1: Ingestao inicial DBC -> Parquet de Staging (Producer-Consumer Stream)
+# -----------------------------------------------------------------------------
 parser:
-  chunk_rows: 100000
+  chunk_rows: 100000  # Lote de registros lidos do DBF/DBC descompactado
   queue_max_size: 3
   encoding: "iso-8859-1"
   min_file_size_bytes: 1024
 
+# -----------------------------------------------------------------------------
+# FASE 3: Enriquecimento e Commit Bronze (Staging Compactado -> Delta Lake)
+# -----------------------------------------------------------------------------
 staging:
   compression: "snappy"
   max_staged_batches_before_compact: 10
+  enrichment_batch_target_mb: 64  # Orcamento de bytes (MB) por lote lido para o RecordBatchReader
 
 delta:
   target_commit_rows: 2000000
@@ -48,11 +60,23 @@ compaction:
 
 mpi:
   salt_secret_env: "QIMED_MPI_SALT"
-  # Sem default_salt: o pipeline falha explicitamente se QIMED_MPI_SALT nao estiver configurado.
-  # Gerar um salt seguro: openssl rand -hex 32
   hash_algorithm: "sha256"
 
 observability:
   enable_psutil_metrics: true
   metrics_interval_sec: 5
   log_level: "INFO"
+
+resources:
+  max_worker_threads: 4
+  batch_chunk_rows: 250000
+  compaction_target_size_mb: 32
+  enable_memory_pool_release: true
+  min_batch_rows: 10000
+  min_batch_rows_degraded: 2000  # Piso reduzido para retry adaptativo (evita clamping excessivo em tabelas largas de 61 colunas)
+  max_batch_rows: 250000
+  memory_pressure_threshold: 0.85
+
+
+
+

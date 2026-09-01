@@ -29,6 +29,8 @@ def load_pipeline_config(config_path: str = None) -> Dict[str, Any]:
     # Resolve caminhos relativos para absolutos com base no base_dir
     paths = cfg.get("paths", {})
     for k, v in paths.items():
+        if isinstance(v, str) and (v.startswith("s3://") or v.startswith("http://") or v.startswith("https://")):
+            continue
         if not os.path.isabs(v):
             paths[k] = os.path.normpath(os.path.join(base_dir, v))
 

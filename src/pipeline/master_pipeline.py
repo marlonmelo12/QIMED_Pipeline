@@ -15,12 +15,13 @@ import psutil
 from src.collectors.datasus_collector import DatasusCollector
 from src.ingestion.staging_writer import ParquetStagingWriter
 from src.ingestion.batch_sink import DeltaBatchSink
-from src.ingestion.lock_manager import PartitionLockManager
+from src.ingestion.lock_manager import PartitionLockManager, PartitionLockConflictError
 from src.ingestion.manifest_delta import DeltaManifestManager
 from src.processing.duckdb_engine import DuckDBEngine
 from src.processing.transformations import CanonicalTransformations
 from src.gold.pipeline_nacional import GoldPipelineNacional
 from src.quality.data_quality import DataQualityAuditor
+from src.observability.memory_governor import MemoryPressureError, is_memory_pressure_error
 from src.observability.metrics import MetricsCollector
 from src.utils.logging_config import setup_logger
 from src.utils.config_loader import load_pipeline_config
@@ -39,6 +40,7 @@ class QimedMasterPipeline:
     Orquestrador Mestre V3 com controle de concorrencia, recovery e rastreabilidade total.
     """
 
+
     def __init__(self, config_path: Optional[str] = None):
         self.cfg = load_pipeline_config(config_path)
         self.metrics_collector = MetricsCollector()
@@ -50,7 +52,8 @@ class QimedMasterPipeline:
         """
         Atualiza a telemetria em tempo real no arquivo pipeline_progress.json.
         """
-        p_path = os.path.join(self.cfg["paths"]["lakehouse_root"], "pipeline_progress.json")
+        p_path = os.path.join(self.cfg.get("paths", {}).get("lakehouse_root", "lakehouse"), "pipeline_progress.json")
+
         payload = {
             "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             "etapa": etapa,
@@ -65,18 +68,95 @@ class QimedMasterPipeline:
         except Exception as e:
             logger.debug(f"Falha ao atualizar telemetria de progresso ({p_path}): {e}")
 
+    def _commit_with_adaptive_retry(
+        self, subsystem: str, target_year: int, target_month: int, uf: str, stg: ParquetStagingWriter, exec_id: str, file_list: List[str]
+    ) -> Dict[str, Any]:
+        """
+        Executa o commit no Delta Lake com retry adaptativo automático e degradação
+        do orçamento de memória caso ocorra MemoryPressureError ou erro de memória C++/Arrow.
+        """
+        try:
+            sink = DeltaBatchSink(subsystem=subsystem, year=target_year, month=target_month, uf=uf, config=self.cfg)
+            return sink.commit_staging_to_bronze(stg, execution_id=exec_id, source_files=file_list)
+        except Exception as e:
+            if is_memory_pressure_error(e):
+                logger.warning(
+                    f"[ADAPTIVE RETRY] Pressao de memoria detectada em {subsystem}-{uf} ({e}). "
+                    f"Executando retry adaptativo com orcamento de lote reduzido (16MB)..."
+                )
+                import gc
+                import pyarrow as pa
+                gc.collect()
+                try:
+                    pa.default_memory_pool().release_unused()
+                except Exception:
+                    pass
+
+                degraded_cfg = dict(self.cfg)
+                degraded_cfg["staging"] = dict(self.cfg.get("staging", {}))
+                degraded_cfg["staging"]["enrichment_batch_target_mb"] = 16.0
+                degraded_cfg["resources"] = dict(self.cfg.get("resources", {}))
+                degraded_min = int(self.cfg.get("resources", {}).get("min_batch_rows_degraded", 2000))
+                degraded_cfg["resources"]["min_batch_rows"] = degraded_min
+
+                sink_retry = DeltaBatchSink(
+                    subsystem=subsystem,
+                    year=target_year,
+                    month=target_month,
+                    uf=uf,
+                    config=degraded_cfg,
+                )
+                try:
+                    return sink_retry.commit_staging_to_bronze(stg, execution_id=exec_id, source_files=file_list)
+                except Exception as retry_err:
+                    raise RuntimeError(
+                        f"AdaptiveRetryExhausted: Falha no retry adaptativo (16MB) para {subsystem}-{uf} apos tentativa inicial: {retry_err}"
+                    ) from retry_err
+            # Se for erro não relacionado a memória (ex: DeltaError por schema/auth/S3), NÃO faz retry e re-lança
+            raise e
+
+    def _derive_execution_id(self, explicit_id: Optional[str] = None) -> str:
+        """
+        Deriva a identidade do owner para locks e telemetria:
+        1. execution_id explicitamente fornecido;
+        2. Contexto Airflow se disponível (dag_id, run_id, task_id, try_number);
+        3. Identificador determinístico de processo local (proc_PID_timestamp_random).
+        """
+        if explicit_id:
+            return explicit_id
+
+        # Tenta inspecionar contexto ativo do Airflow se disponível
+        try:
+            from airflow.operators.python import get_current_context
+            ctx = get_current_context()
+            if ctx:
+                ti = ctx.get("task_instance") or ctx.get("ti")
+                dag_run = ctx.get("dag_run")
+                dag = ctx.get("dag")
+                dag_id = dag.dag_id if dag else "dag"
+                run_id = dag_run.run_id if dag_run else "run"
+                task_id = ti.task_id if ti else "task"
+                try_num = ti.try_number if ti and hasattr(ti, "try_number") else 1
+                return f"airflow__{dag_id}__{run_id}__{task_id}__try{try_num}__{os.getpid()}"
+        except Exception:
+            pass
+
+        return f"proc_{os.getpid()}_{int(time.time())}_{uuid.uuid4().hex[:6]}"
+
     def execute_bronze_ingestion(
         self,
         target_month: int = 5,
         target_year: int = 2026,
         force_reprocess: bool = False,
         execution_id: Optional[str] = None,
+        uf_list: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         """
-        Executa a ingestão Bronze (SIH e SIA) para todas as 27 UFs com controle transacional Delta.
+        Executa a ingestão Bronze (SIH e SIA) para as UFs especificadas (ou todas as 27 UFs) com controle transacional Delta.
         """
-        exec_id = execution_id or f"exec_bronze_{int(time.time())}_{uuid.uuid4().hex[:6]}"
-        total_ufs = len(UF_LIST)
+        exec_id = self._derive_execution_id(execution_id)
+        target_ufs = uf_list or UF_LIST
+        total_ufs = len(target_ufs)
         total_sih_rows = 0
         total_sia_rows = 0
         failed_partitions: List[Dict[str, str]] = []
@@ -85,7 +165,7 @@ class QimedMasterPipeline:
         # SIH
         t0_sih = time.time()
         logger.info(f"Ingestao Bronze SIH ({target_month:02d}/{target_year})...")
-        for idx, uf in enumerate(UF_LIST, 1):
+        for idx, uf in enumerate(target_ufs, 1):
             pct = round((idx / total_ufs) * 50.0, 1)
             self._update_progress("Bronze - Ingestao SIH", f"[{idx}/{total_ufs}] Processando SIH-{uf}...", pct)
             partition_key = f"SIH/{target_year}/{target_month:02d}/{uf}"
@@ -98,12 +178,36 @@ class QimedMasterPipeline:
                 with self.lock_manager.lock(partition_key, exec_id):
                     col = DatasusCollector(subsystem="SIH", uf=uf, year=target_year, month=target_month)
                     raw_file = col.fetch()
+                    file_list = [raw_file]
                     stg = ParquetStagingWriter(subsystem="sih", year=target_year, month=target_month, uf=uf)
                     stg.process_batch_stream(col.parse_record_batches(raw_file, chunksize=100000))
 
-                    sink = DeltaBatchSink(subsystem="sih", year=target_year, month=target_month, uf=uf)
-                    commit_res = sink.commit_staging_to_bronze(stg, execution_id=exec_id, source_files=[raw_file])
+                    commit_res = self._commit_with_adaptive_retry(
+                        subsystem="sih",
+                        target_year=target_year,
+                        target_month=target_month,
+                        uf=uf,
+                        stg=stg,
+                        exec_id=exec_id,
+                        file_list=file_list,
+                    )
                     total_sih_rows += commit_res.get("total_rows", 0)
+                    del col, stg
+            except PartitionLockConflictError as e:
+                err_msg = str(e)
+                logger.warning(f"[CONFLITO DE LOCK] Particao {partition_key} ignorada nesta rodada: {err_msg}")
+                self.manifest_manager.record_manifest_entry(
+                    subsystem="SIH",
+                    year=target_year,
+                    month=target_month,
+                    uf=uf,
+                    files=["skipped_lock_conflict"],
+                    total_rows=0,
+                    status="skipped_lock_conflict",
+                    execution_id=exec_id,
+                    error_message=err_msg,
+                )
+                failed_partitions.append({"partition": partition_key, "error": err_msg})
             except Exception as e:
                 err_msg = f"{type(e).__name__}: {str(e)}"
                 logger.error(f"[ERRO CRITICO] Falha ao processar {partition_key}: {err_msg}\n{traceback.format_exc()}")
@@ -119,6 +223,12 @@ class QimedMasterPipeline:
                     error_message=err_msg,
                 )
                 failed_partitions.append({"partition": partition_key, "error": err_msg})
+            finally:
+                try:
+                    import pyarrow as pa
+                    pa.default_memory_pool().release_unused()
+                except Exception:
+                    pass
 
             current_rss = self.process.memory_info().rss / (1024 * 1024)
             peak_rss = max(peak_rss, current_rss)
@@ -129,7 +239,7 @@ class QimedMasterPipeline:
         # SIA
         t0_sia = time.time()
         logger.info(f"Ingestao Bronze SIA com Auto-Discovery Multipart ({target_month:02d}/{target_year})...")
-        for idx, uf in enumerate(UF_LIST, 1):
+        for idx, uf in enumerate(target_ufs, 1):
             pct = round(50.0 + (idx / total_ufs) * 50.0, 1)
             self._update_progress("Bronze - Ingestao SIA", f"[{idx}/{total_ufs}] Processando SIA-{uf}...", pct)
             partition_key = f"SIA/{target_year}/{target_month:02d}/{uf}"
@@ -148,9 +258,32 @@ class QimedMasterPipeline:
                     for f in file_list:
                         stg.process_batch_stream(col.parse_record_batches(f, chunksize=100000))
 
-                    sink = DeltaBatchSink(subsystem="sia", year=target_year, month=target_month, uf=uf)
-                    commit_res = sink.commit_staging_to_bronze(stg, execution_id=exec_id, source_files=file_list)
+                    commit_res = self._commit_with_adaptive_retry(
+                        subsystem="sia",
+                        target_year=target_year,
+                        target_month=target_month,
+                        uf=uf,
+                        stg=stg,
+                        exec_id=exec_id,
+                        file_list=file_list,
+                    )
                     total_sia_rows += commit_res.get("total_rows", 0)
+                    del col, stg
+            except PartitionLockConflictError as e:
+                err_msg = str(e)
+                logger.warning(f"[CONFLITO DE LOCK] Particao {partition_key} ignorada nesta rodada: {err_msg}")
+                self.manifest_manager.record_manifest_entry(
+                    subsystem="SIA",
+                    year=target_year,
+                    month=target_month,
+                    uf=uf,
+                    files=["skipped_lock_conflict"],
+                    total_rows=0,
+                    status="skipped_lock_conflict",
+                    execution_id=exec_id,
+                    error_message=err_msg,
+                )
+                failed_partitions.append({"partition": partition_key, "error": err_msg})
             except Exception as e:
                 err_msg = f"{type(e).__name__}: {str(e)}"
                 logger.error(f"[ERRO CRITICO] Falha ao processar {partition_key}: {err_msg}\n{traceback.format_exc()}")
@@ -166,11 +299,18 @@ class QimedMasterPipeline:
                     error_message=err_msg,
                 )
                 failed_partitions.append({"partition": partition_key, "error": err_msg})
+            finally:
+                try:
+                    import pyarrow as pa
+                    pa.default_memory_pool().release_unused()
+                except Exception:
+                    pass
 
             current_rss = self.process.memory_info().rss / (1024 * 1024)
             peak_rss = max(peak_rss, current_rss)
 
         dur_sia = time.time() - t0_sia
+
         self.metrics_collector.record_stage_metrics(exec_id, "Bronze SIA", dur_sia, total_sia_rows, peak_rss)
 
         return {

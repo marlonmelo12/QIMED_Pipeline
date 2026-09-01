@@ -39,7 +39,8 @@ class CanonicalTransformations:
         self.bronze_path = self.cfg.get("paths", {}).get("bronze_dir", "lakehouse/bronze")
         self.lineage_tracker = DataLineageTracker()
         self.mpi_resolver = PatientIdentityResolver(duck_engine=self.engine, config=self.cfg)
-        os.makedirs(self.silver_path, exist_ok=True)
+        if not str(self.silver_path).startswith("s3://"):
+            os.makedirs(self.silver_path, exist_ok=True)
 
     def _persist_silver_table(
         self,
@@ -59,7 +60,10 @@ class CanonicalTransformations:
         substituidas, preservando todas as outras particoes intactas.
         Isso garante idempotencia estrita por particao, independente da ordem de chamada.
         """
-        t_path = os.path.join(self.silver_path, table_name)
+        from src.utils.s3_storage import get_s3_storage_options, resolve_lakehouse_path
+
+        t_path = resolve_lakehouse_path(os.path.join(self.silver_path, table_name), default_layer="silver")
+        storage_opts = get_s3_storage_options(t_path)
 
         # [CORRECAO-17] Classificacao de excecoes:
         # - OSError/IOError: fatais (disco, permissao) -> re-raise imediato.
@@ -68,6 +72,7 @@ class CanonicalTransformations:
             write_kwargs = dict(
                 mode=mode,
                 partition_by=partition_by,
+                storage_options=storage_opts,
                 schema_mode="overwrite" if mode == "overwrite" else "merge",
             )
             if predicate is not None:
@@ -129,8 +134,10 @@ class CanonicalTransformations:
         collector = AnsCollector(modalidade="operadoras")
 
         # 1. dim_operadoras_saude
+        from src.utils.s3_storage import lakehouse_path_exists
+
         ans_operadoras_bronze = os.path.join(self.bronze_path, "ans", "operadoras").replace(chr(92), "/")
-        if os.path.exists(ans_operadoras_bronze):
+        if lakehouse_path_exists(ans_operadoras_bronze):
             df_op = self.engine.query(f"SELECT * FROM delta_scan('{ans_operadoras_bronze}')").df()
             mapa_op = {
                 "cd_operadora": "codigo_registro_ans",
@@ -184,11 +191,11 @@ class CanonicalTransformations:
         dim_op_silver = os.path.join(self.silver_path, "dim_operadoras_saude").replace(chr(92), "/")
         sih_silver_path = os.path.join(self.silver_path, "fct_internacao").replace(chr(92), "/")
         raw_rss_path = os.path.join(self.silver_path, "fct_ressarcimento_sus").replace(chr(92), "/")
-        if not os.path.exists(raw_rss_path):
+        if not lakehouse_path_exists(raw_rss_path):
             raw_rss_path = os.path.join(self.bronze_path, "ans", "ressarcimento").replace(chr(92), "/")
 
-        if os.path.exists(raw_rss_path) and os.path.exists(dim_op_silver):
-            if os.path.exists(sih_silver_path):
+        if lakehouse_path_exists(raw_rss_path) and lakehouse_path_exists(dim_op_silver):
+            if lakehouse_path_exists(sih_silver_path):
                 sih_cte = f"""
                 WITH aih_paciente_map AS (
                     -- Mapeamento canônico 1:1 por AIH para herança do MPI
@@ -270,8 +277,15 @@ class CanonicalTransformations:
                 raise
 
     def transformar_sih_para_silver(self, execution_id: str = "exec_sih"):
+        """
+        Transforma e persiste fct_internacao e dim_paciente na camada Silver (Delta Lake),
+        aplicando Master Patient Index (MPI), resolução de episódios clínicos (AIH 1 e 5),
+        surrogate keys determinísticas, sanitização de CIDs e tipagem canônica.
+        """
+        from src.utils.s3_storage import lakehouse_path_exists
+
         sih_bronze_delta = os.path.join(self.bronze_path, "datasus", "sih").replace(chr(92), "/")
-        if not os.path.exists(sih_bronze_delta):
+        if not lakehouse_path_exists(sih_bronze_delta):
             logger.warning("Tabela Bronze SIH nao encontrada para transformacao Silver.")
             return
 
@@ -448,8 +462,15 @@ class CanonicalTransformations:
             raise
 
     def transformar_sia_para_silver(self, execution_id: str = "exec_sia"):
+        """
+        Transforma e persiste fct_atendimentos_ambulatoriais na camada Silver (Delta Lake),
+        com particionamento inteligente por UF, Dynamic Partition Overwrite,
+        surrogate keys determinísticas, sanitização de idades/CIDs e flags de integridade contábil.
+        """
+        from src.utils.s3_storage import lakehouse_path_exists
+
         sia_bronze_delta = os.path.join(self.bronze_path, "datasus", "sia").replace(chr(92), "/")
-        if not os.path.exists(sia_bronze_delta):
+        if not lakehouse_path_exists(sia_bronze_delta):
             logger.warning("Tabela Bronze SIA nao encontrada para transformacao Silver.")
             return
 
@@ -603,14 +624,16 @@ class CanonicalTransformations:
         Transforma e correlaciona as AIHs Rejeitadas (RJ) com as Críticas de Processamento (ER),
         materializando a tabela fct_glosas_hospitalares na camada Silver.
         """
+        from src.utils.s3_storage import lakehouse_path_exists
+
         sih_rj_delta = os.path.join(self.bronze_path, "datasus", "sih_rj").replace("\\", "/")
         sih_er_delta = os.path.join(self.bronze_path, "datasus", "sih_er").replace("\\", "/")
         
-        if not os.path.exists(sih_rj_delta):
+        if not lakehouse_path_exists(sih_rj_delta):
             logger.warning("Bronze SIH-RJ não encontrado para transformação de glosas hospitalares.")
             return
 
-        has_er = os.path.exists(sih_er_delta)
+        has_er = lakehouse_path_exists(sih_er_delta)
         er_source = f"delta_scan('{sih_er_delta}')" if has_er else "(SELECT NULL AS N_AIH, NULL AS CO_ERRO, NULL AS DS_ERRO, NULL AS ano, NULL AS mes, NULL AS uf WHERE 1=0)"
 
         sql_glosas = f"""

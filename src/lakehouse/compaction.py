@@ -4,6 +4,7 @@ Consolida múltiplos arquivos de staging Parquet em um número ideal de arquivos
 balanceados por UF antes do commit final utilizando streaming out-of-core (Arrow Dataset).
 """
 import os
+import time
 from typing import Any, Dict, List, Optional
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -17,14 +18,18 @@ logger = setup_logger(__name__)
 
 class DeltaCompactor:
     """
-    Consolida arquivos Parquet baseado na cardinalidade da UF para evitar small files.
+    Consolida arquivos Parquet baseado na cardinalidade da UF para evitar small files
+    utilizando streaming estritamente Bounded-Memory.
     """
 
     def __init__(self, config: Optional[Dict[str, Any]] = None):
         self.cfg = config or load_pipeline_config()
         self.compaction_cfg = self.cfg.get("compaction", {})
+        self.resources_cfg = self.cfg.get("resources", {})
         self.small_ufs = set(self.compaction_cfg.get("small_uf_list", ["AC", "AP", "RR", "RO", "TO", "SE"]))
         self.large_ufs = set(self.compaction_cfg.get("large_uf_list", ["SP"]))
+        self.batch_size = int(self.resources_cfg.get("batch_chunk_rows", 250_000))
+        self.max_threads = int(self.resources_cfg.get("max_worker_threads", 4))
 
     def get_target_files_count(self, uf: str, total_rows: int) -> int:
         """
@@ -40,14 +45,23 @@ class DeltaCompactor:
 
     def compact_staging_files(self, staging_files: List[str], uf: str, output_dir: str) -> List[str]:
         """
-        Lê múltiplos arquivos Parquet de staging e grava os arquivos consolidados balanceados em streaming.
+        Lê múltiplos arquivos Parquet de staging e grava os arquivos consolidados balanceados
+        em streaming bounded-memory sem materialização global em RAM.
         """
         if not staging_files:
             return []
 
-        # Se já tiver apenas 1 arquivo pequeno, reaproveita diretamente
         if len(staging_files) == 1:
             return staging_files
+
+        t0 = time.perf_counter()
+
+        # Governança de threads PyArrow
+        try:
+            pa.set_cpu_count(self.max_threads)
+            pa.set_io_cpu_count(self.max_threads)
+        except Exception:
+            pass
 
         dataset = ds.dataset(staging_files, format="parquet")
         total_rows = dataset.count_rows()
@@ -57,8 +71,10 @@ class DeltaCompactor:
             return staging_files
 
         os.makedirs(output_dir, exist_ok=True)
-        scanner = dataset.scanner(batch_size=250_000)
+        scanner_batch_size = min(self.batch_size, 50_000) if len(dataset.schema) > 30 else self.batch_size
+        scanner = dataset.scanner(batch_size=scanner_batch_size)
         compacted_files = []
+
 
         if target_files_count == 1:
             out_name = "compacted-part-0001.parquet"
@@ -66,6 +82,7 @@ class DeltaCompactor:
             with pq.ParquetWriter(out_path, dataset.schema, compression="snappy") as writer:
                 for batch in scanner.to_batches():
                     writer.write_batch(batch)
+                    del batch
             compacted_files.append(out_path)
         else:
             rows_per_file = max(1, total_rows // target_files_count)
@@ -88,8 +105,21 @@ class DeltaCompactor:
 
                 writer.write_batch(batch)
                 current_file_rows += batch.num_rows
+                del batch
 
             writer.close()
 
-        logger.info(f"[COMPACTION] UF-{uf}: {len(staging_files)} arquivos compactados em {len(compacted_files)} arquivos ideais ({total_rows:,} linhas).")
+        # Liberação ativa de memória nativa do pool Arrow
+        del dataset, scanner
+        try:
+            pa.default_memory_pool().release_unused()
+        except Exception:
+            pass
+
+        dur = time.perf_counter() - t0
+        logger.info(
+            f"[COMPACTION] UF={uf} input_files={len(staging_files)} "
+            f"output_files={len(compacted_files)} rows={total_rows:,} duration={dur:.2f}s"
+        )
         return compacted_files
+

@@ -34,6 +34,9 @@ class GoldPipelineNacional:
         """
         conn = duckdb.connect(self.dw_file_path)
         try:
+            from src.utils.s3_storage import configure_duckdb_s3, lakehouse_path_exists
+            configure_duckdb_s3(conn)
+
             try:
                 conn.execute("INSTALL delta; LOAD delta;")
             except Exception:
@@ -46,7 +49,7 @@ class GoldPipelineNacional:
             dim_op_path = os.path.join(self.silver_dir, "dim_operadoras_saude").replace("\\", "/")
 
             # 1. agg_internacoes_uf
-            if os.path.exists(fct_int_path):
+            if lakehouse_path_exists(fct_int_path):
                 sql_int_uf = f"""
                 CREATE OR REPLACE TABLE agg_internacoes_uf AS
                 SELECT
@@ -70,7 +73,7 @@ class GoldPipelineNacional:
                 logger.info("[GOLD] Data Mart agg_internacoes_uf materializado no DuckDB DW.")
 
             # 2. agg_procedimentos_uf
-            if os.path.exists(fct_amb_path):
+            if lakehouse_path_exists(fct_amb_path):
                 sql_proc_uf = f"""
                 CREATE OR REPLACE TABLE agg_procedimentos_uf AS
                 SELECT
@@ -93,7 +96,7 @@ class GoldPipelineNacional:
                 logger.info("[GOLD] Data Mart agg_procedimentos_uf materializado no DuckDB DW.")
 
             # 3. agg_perfil_epidemiologico
-            if os.path.exists(fct_int_path):
+            if lakehouse_path_exists(fct_int_path):
                 sql_epi = f"""
                 CREATE OR REPLACE TABLE agg_perfil_epidemiologico AS
                 SELECT
@@ -111,7 +114,7 @@ class GoldPipelineNacional:
                 logger.info("[GOLD] Data Mart agg_perfil_epidemiologico materializado no DuckDB DW.")
 
             # 4. dm_ans_glosas_operadoras (Data Mart ANS/TISS e Ressarcimento ao SUS)
-            if os.path.exists(fct_ress_path) and os.path.exists(dim_op_path):
+            if lakehouse_path_exists(fct_ress_path) and lakehouse_path_exists(dim_op_path):
                 sql_dm_ans = f"""
                 CREATE OR REPLACE TABLE dm_ans_glosas_operadoras AS
                 SELECT
@@ -164,7 +167,7 @@ class GoldPipelineNacional:
                 """)
 
             # 5. dm_glosas_auditoria
-            if os.path.exists(fct_glo_path):
+            if lakehouse_path_exists(fct_glo_path):
                 sql_dm_glo = f"""
                 CREATE OR REPLACE TABLE dm_glosas_auditoria AS
                 SELECT
@@ -210,7 +213,7 @@ class GoldPipelineNacional:
                 """)
 
             # 6. dm_hospital_efficiency
-            if os.path.exists(fct_int_path):
+            if lakehouse_path_exists(fct_int_path):
                 sql_dm_eff = f"""
                 CREATE OR REPLACE TABLE dm_hospital_efficiency AS
                 SELECT
@@ -252,7 +255,7 @@ class GoldPipelineNacional:
                 """)
 
             # 7. dm_icsap_prevention
-            if os.path.exists(fct_int_path):
+            if lakehouse_path_exists(fct_int_path):
                 sql_dm_icsap = f"""
                 CREATE OR REPLACE TABLE dm_icsap_prevention AS
                 WITH icsap_base AS (
@@ -316,7 +319,7 @@ class GoldPipelineNacional:
                 """)
 
             # 8. aud_alertas_anomalias (Central de Anomalias)
-            if os.path.exists(fct_int_path):
+            if lakehouse_path_exists(fct_int_path):
                 from src.gold.models.kpi_central_anomalias import build_aud_alertas_anomalias
                 build_aud_alertas_anomalias(conn, fct_internacao_source=f"delta_scan('{fct_int_path}')", target_table="aud_alertas_anomalias")
                 logger.info("[GOLD] Tabela de auditoria aud_alertas_anomalias materializada no DuckDB DW.")
@@ -342,7 +345,7 @@ class GoldPipelineNacional:
                 """)
 
             # 9. Views Semânticas Analíticas e Preditivas
-            if os.path.exists(fct_int_path):
+            if lakehouse_path_exists(fct_int_path):
                 from src.gold.models.views_semanticas import registrar_views_semanticas
                 try:
                     conn.execute(f"CREATE OR REPLACE VIEW fct_internacao AS SELECT * FROM delta_scan('{fct_int_path}')")

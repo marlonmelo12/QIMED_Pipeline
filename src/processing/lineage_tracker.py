@@ -24,7 +24,8 @@ class DataLineageTracker:
         cfg = load_pipeline_config()
         base_system = system_dir or cfg.get("paths", {}).get("system_dir", "lakehouse/system")
         self.lineage_table_path = os.path.join(base_system, "lineage")
-        os.makedirs(self.lineage_table_path, exist_ok=True)
+        if not str(self.lineage_table_path).startswith("s3://"):
+            os.makedirs(self.lineage_table_path, exist_ok=True)
 
     def record_lineage(
         self,

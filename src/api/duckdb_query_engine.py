@@ -18,7 +18,9 @@ def query_gold(sql: str) -> list[dict]:
     cfg = load_pipeline_config()
     dw_path = cfg.get("paths", {}).get("gold_dw_file", "warehouse/qimed_dw.duckdb")
     try:
+        from src.utils.s3_storage import configure_duckdb_s3
         with duckdb.connect(dw_path, read_only=True) as conn:
+            configure_duckdb_s3(conn)
             return conn.execute(sql).arrow().read_all().to_pylist()
     except Exception:
         logger.error(f"Falha na query DuckDB: {sql[:200]}", exc_info=True)

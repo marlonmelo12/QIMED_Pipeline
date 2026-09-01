@@ -258,6 +258,7 @@ class DatasusCollector(BaseCollector):
         dbf_path = self._ensure_dbf_decompressed(file_path)
 
         table = DBF(dbf_path, encoding="iso-8859-1", load=False, ignore_missing_memofile=True)
+        field_names = [str(col).upper().strip() for col in table.field_names]
         batch_records = []
         total_parsed = 0
         _first_batch_validated = False
@@ -271,7 +272,7 @@ class DatasusCollector(BaseCollector):
 
             if len(batch_records) >= chunksize:
                 df_chunk = pd.DataFrame(batch_records)
-                df_chunk.columns = [str(col).upper().strip() for col in df_chunk.columns]
+                df_chunk.columns = field_names[:len(df_chunk.columns)]
                 batch_arrow = pa.RecordBatch.from_pandas(df_chunk, preserve_index=False)
 
                 # Hook de drift detection: roda uma única vez no primeiro batch
@@ -292,7 +293,7 @@ class DatasusCollector(BaseCollector):
 
         if batch_records:
             df_chunk = pd.DataFrame(batch_records)
-            df_chunk.columns = [str(col).upper().strip() for col in df_chunk.columns]
+            df_chunk.columns = field_names[:len(df_chunk.columns)]
             batch_arrow = pa.RecordBatch.from_pandas(df_chunk, preserve_index=False)
 
             # Hook de drift: se o arquivo inteiro couber em um único batch < chunksize
@@ -304,11 +305,14 @@ class DatasusCollector(BaseCollector):
                     year=self.year,
                     month=self.month,
                 )
+                _first_batch_validated = True
 
             yield batch_arrow
             del df_chunk
 
+
     def parse_chunks(self, raw_data: Any, chunksize: int = 100000) -> Generator[pd.DataFrame, None, None]:
+
         """
         Gerador de compatibilidade que retorna DataFrames a partir dos Arrow RecordBatches.
         """

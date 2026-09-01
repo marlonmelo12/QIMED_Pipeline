@@ -18,6 +18,9 @@ WORKDIR /opt/qimed
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Pre-install and embed DuckDB extensions (delta, httpfs) for hermetic offline runtime
+RUN python3 -c "import duckdb; conn = duckdb.connect(); conn.execute('INSTALL delta; INSTALL httpfs;'); conn.close()"
+
 # Copy project files
 COPY src/ ./src/
 COPY dags/ ./dags/

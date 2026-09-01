@@ -372,11 +372,21 @@ class TestDatasusCollectorDriftHook:
         # Mock: substitui _ensure_dbf_decompressed para retornar caminho fictício
         monkeypatch.setattr(collector, "_ensure_dbf_decompressed", lambda p: p)
 
-        # Mock: substitui DBF com lista de records
+        class MockDBF:
+            def __init__(self, records):
+                self.records = records
+                self.field_names = list(records[0].keys()) if records else []
+
+            def __iter__(self):
+                return iter(self.records)
+
+        # Mock: substitui DBF com instancia de MockDBF contendo field_names
         import src.collectors.datasus_collector as dc_module
-        monkeypatch.setattr(dc_module, "DBF", lambda path, **kwargs: records)
+        monkeypatch.setattr(dc_module, "DBF", lambda path, **kwargs: MockDBF(records))
 
         return collector
+
+
 
     def test_valid_schema_passes_hook(self, monkeypatch):
         """Schema válido: collector produz batches normalmente."""

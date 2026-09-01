@@ -9,11 +9,26 @@ x-airflow-common:
   - PYTHONPATH=/opt/qimed
   - QIMED_MPI_SALT=${QIMED_MPI_SALT:-qimed_dev_salt_2026_mpi_secret_key}
   - SALT_SECRET=${SALT_SECRET:-qimed_dev_salt_2026}
-  - LAKEHOUSE_PATH=/opt/qimed/lakehouse/bronze
-  - LAKEHOUSE_ROOT=/opt/qimed/lakehouse
+  - STORAGE_BACKEND=${STORAGE_BACKEND:-s3}
+  - AWS_ENDPOINT_URL=${AWS_ENDPOINT_URL:-http://minio:9000}
+  - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:-minio_admin}
+  - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:-minio_secret_password}
+  - AWS_REGION=${AWS_REGION:-us-east-1}
+  - AWS_ALLOW_HTTP=true
+  - AWS_S3_ALLOW_UNSAFE_RENAME=true
+  - S3_BUCKET_NAME=${S3_BUCKET_NAME:-qimed-lakehouse}
+  - LAKEHOUSE_PATH=s3://qimed-lakehouse/bronze
+  - LAKEHOUSE_ROOT=s3://qimed-lakehouse
   - WAREHOUSE_PATH=/opt/qimed/warehouse
   - LOG_LEVEL=${LOG_LEVEL:-INFO}
   - AIRFLOW__API__AUTH_BACKENDS=airflow.api.auth.backend.basic_auth,airflow.api.auth.backend.session
+  - AIRFLOW__CORE__PARALLELISM=4
+  - AIRFLOW__CORE__MAX_ACTIVE_TASKS_PER_DAG=3
+  - AIRFLOW__CORE__MAX_ACTIVE_RUNS_PER_DAG=1
+  - RAYON_NUM_THREADS=4
+  - ARROW_NUM_THREADS=4
+  - OMP_NUM_THREADS=4
+
   volumes: &id002
   - ./dags:/opt/qimed/dags
   - ./src:/opt/qimed/src
@@ -25,9 +40,48 @@ x-airflow-common:
   depends_on: &id003
     postgres:
       condition: service_healthy
+    minio:
+      condition: service_healthy
   networks:
   - qimed-network
 services:
+  minio:
+    image: minio/minio:latest
+    container_name: qimed-minio
+    restart: always
+    environment:
+      MINIO_ROOT_USER: ${AWS_ACCESS_KEY_ID:-minio_admin}
+      MINIO_ROOT_PASSWORD: ${AWS_SECRET_ACCESS_KEY:-minio_secret_password}
+    command: server /data --console-address ":9001"
+    ports:
+    - "9000:9000"
+    - "9001:9001"
+    volumes:
+    - minio-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+    networks:
+    - qimed-network
+
+  minio-create-buckets:
+    image: minio/mc:latest
+    container_name: qimed-minio-init
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      /usr/bin/mc alias set myminio http://minio:9000 ${AWS_ACCESS_KEY_ID:-minio_admin} ${AWS_SECRET_ACCESS_KEY:-minio_secret_password};
+      /usr/bin/mc mb --ignore-existing myminio/${S3_BUCKET_NAME:-qimed-lakehouse};
+      exit 0;
+      "
+    networks:
+    - qimed-network
+
   postgres:
     image: postgres:13
     restart: always
@@ -59,7 +113,7 @@ services:
     entrypoint:
     - bash
     - -c
-    - "echo \"Aguardando PostgreSQL ficar pronto...\"\nairflow db migrate &&\nairflow\
+    - "echo \"Aguardando PostgreSQL e MinIO ficarem prontos...\"\nairflow db migrate &&\nairflow\
       \ users create \\\n  --username admin \\\n  --firstname admin \\\n  --lastname\
       \ admin \\\n  --role Admin \\\n  --email admin@example.com \\\n  --password\
       \ admin || true\n"
@@ -111,12 +165,22 @@ services:
     - ./warehouse:/opt/qimed/warehouse
     environment:
     - PYTHONPATH=/opt/qimed
+    - STORAGE_BACKEND=${STORAGE_BACKEND:-s3}
+    - AWS_ENDPOINT_URL=${AWS_ENDPOINT_URL:-http://minio:9000}
+    - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:-minio_admin}
+    - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:-minio_secret_password}
+    - AWS_REGION=${AWS_REGION:-us-east-1}
+    - AWS_ALLOW_HTTP=true
+    - AWS_S3_ALLOW_UNSAFE_RENAME=true
+    - S3_BUCKET_NAME=${S3_BUCKET_NAME:-qimed-lakehouse}
     - AIRFLOW_API_URL=http://airflow-webserver:8080/api/v1
     - AIRFLOW_API_USER=admin
     - AIRFLOW_API_PASSWORD=admin
     - QIMED_DATABASE_URL=postgresql+asyncpg://airflow:airflow@postgres:5432/airflow
     depends_on:
       postgres:
+        condition: service_healthy
+      minio:
         condition: service_healthy
     networks:
     - qimed-network
@@ -125,6 +189,7 @@ services:
     - -c
 volumes:
   postgres-db-volume: null
+  minio-data: null
 networks:
   qimed-network:
     driver: bridge

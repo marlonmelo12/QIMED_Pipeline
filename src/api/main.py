@@ -1,4 +1,4 @@
-﻿from fastapi import FastAPI
+from fastapi import FastAPI
 from contextlib import asynccontextmanager
 from src.api.routers.analytics import router as analytics_router
 from src.api.routers.drilldown import router as drilldown_router

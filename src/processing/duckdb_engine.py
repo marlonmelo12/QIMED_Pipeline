@@ -58,6 +58,10 @@ class DuckDBEngine:
                     f"Verifique a versao do DuckDB e a conectividade com extensions.duckdb.org."
                 ) from e
 
+        # Configura suporte S3 / MinIO via extensão httpfs
+        from src.utils.s3_storage import configure_duckdb_s3
+        configure_duckdb_s3(self.conn)
+
     def query(self, sql: str) -> duckdb.DuckDBPyRelation:
         """
         Executa uma consulta SQL retornando uma relação DuckDB lazy.
