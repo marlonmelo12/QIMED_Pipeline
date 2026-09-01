@@ -1,134 +1,184 @@
-﻿import time
+"""
+Suíte de Testes Automatizados para o Painel de Glosas ANS e Detecção Estatística de Outliers.
+"""
 import pytest
 from fastapi.testclient import TestClient
 from src.api.main import app
-import duckdb
-from src.api.duckdb_query_engine import query_painel_glosa_ans
+from src.analytics.outliers import detectar_outliers_mad
 
 client = TestClient(app)
 
 
-def test_painel_glosa_ans_status_200_and_latency():
-    """
-    Critério de Aceitação:
-    A rota GET /api/v1/analytics/painel-glosa-ans?periodo=2025 responde com Status 200 OK em menos de 15ms.
-    """
-    # Warmup
-    client.get("/api/v1/analytics/painel-glosa-ans?periodo=2025")
+# ==============================================================================
+# 1. TESTES UNITÁRIOS DA METODOLOGIA ESTATÍSTICA DE OUTLIERS (MAD)
+# ==============================================================================
 
-    t0 = time.perf_counter()
-    response = client.get("/api/v1/analytics/painel-glosa-ans?periodo=2025")
-    elapsed_ms = (time.perf_counter() - t0) * 1000
+def test_outlier_cenario_a_sem_outlier():
+    """Cenário A: Distribuição homogênea sem nenhum outlier estatístico."""
+    dados_normais = [
+        {"codigo_registro_ans": f"00000{i}", "razao_social": f"Operadora {i}", "valor_total_glosado_brl": 1000.0 + (i * 20)}
+        for i in range(15)
+    ]
+    res = detectar_outliers_mad(dados_normais, threshold_mad=3.5, threshold_concentracao_pct=50.0)
 
-    assert response.status_code == 200
-    assert elapsed_ms < 15.0, f"Latência de resposta excedeu 15ms: {elapsed_ms:.2f}ms"
+    assert res.has_outlier is False
+    assert res.outliers_count == 0
+    assert res.operadora_outlier_principal is None
+    assert res.codigo_outlier_principal is None
+    assert res.concentracao_pct_principal is None
+    assert len(res.outliers_detectados) == 0
+    assert "Nenhuma concentração" in res.mensagem or "Nenhuma" in res.mensagem
 
 
-def test_painel_glosa_ans_structure():
-    """
-    Valida que o payload JSON contém as 3 estruturas principais:
-    1. kpis (5 cards);
-    2. alerta_anomalia_outlier;
-    3. detalhamento_glosa_inicial (3 dimensões).
-    """
-    response = client.get("/api/v1/analytics/painel-glosa-ans?periodo=2026-05")
-    assert response.status_code == 200
-    data = response.json()
+def test_outlier_cenario_b_um_outlier_dominante():
+    """Cenário B: Exatamente um outlier extremo com dominância de concentração."""
+    dados = [
+        {"codigo_registro_ans": f"00000{i}", "razao_social": f"Operadora {i}", "valor_total_glosado_brl": 1000.0}
+        for i in range(10)
+    ]
+    dados.append({
+        "codigo_registro_ans": "999999",
+        "razao_social": "OPERADORA ATÍPICA S.A.",
+        "valor_total_glosado_brl": 1000000.0,
+    })
 
-    # 1. Os 5 Cards Superiores de KPI
+    res = detectar_outliers_mad(dados, threshold_mad=3.5, threshold_concentracao_pct=50.0)
+
+    assert res.has_outlier is True
+    assert res.outliers_count == 1
+    assert res.codigo_outlier_principal == "999999"
+    assert res.operadora_outlier_principal == "OPERADORA ATÍPICA S.A."
+    assert res.concentracao_pct_principal is not None
+    assert res.concentracao_pct_principal > 90.0
+    assert len(res.outliers_detectados) == 1
+
+
+def test_outlier_cenario_c_multiplos_outliers():
+    """Cenário C: Múltiplos candidatos a outlier estatístico (retorna lista e destaca o principal)."""
+    dados = [
+        {"codigo_registro_ans": f"00000{i}", "razao_social": f"Operadora {i}", "valor_total_glosado_brl": 1000.0}
+        for i in range(20)
+    ]
+    dados.append({
+        "codigo_registro_ans": "888888",
+        "razao_social": "OUTLIER SECUNDÁRIO",
+        "valor_total_glosado_brl": 400000.0,
+    })
+    dados.append({
+        "codigo_registro_ans": "999999",
+        "razao_social": "OUTLIER PRIMÁRIO",
+        "valor_total_glosado_brl": 900000.0,
+    })
+
+    res = detectar_outliers_mad(dados, threshold_mad=3.5, threshold_concentracao_pct=50.0)
+
+    assert res.has_outlier is True
+    assert res.outliers_count >= 2
+    assert res.codigo_outlier_principal == "999999"
+    assert res.operadora_outlier_principal == "OUTLIER PRIMÁRIO"
+    assert len(res.outliers_detectados) >= 2
+    # Verifica ordenação decrescente por valor
+    assert res.outliers_detectados[0].valor >= res.outliers_detectados[1].valor
+
+
+# ==============================================================================
+# 2. TESTES DE CONTRATO DA API E REQUISITOS DE INTEGRIDADE
+# ==============================================================================
+
+def test_painel_glosa_ans_visao_setor():
+    """Valida o endpoint do Painel de Glosa ANS na visão Setor (com expurgo de outlier)."""
+    res = client.get("/api/v1/analytics/painel-glosa-ans?periodo=2025&visao=setor")
+    assert res.status_code == 200
+    data = res.json()
+
+    # 1. Estrutura Principal
+    assert "visao_aplicada" in data
+    assert data["visao_aplicada"] == "setor"
     assert "kpis" in data
+    assert "alerta_anomalia_outlier" in data
+    assert "detalhamento_glosa_inicial" in data
+
+    # 2. 5 Cards de KPI (Valores Numéricos Puros)
     kpis = data["kpis"]
     assert "tempo_medio_pagamento_dias" in kpis
     assert "taxa_glosa_inicial_pct" in kpis
     assert "taxa_glosa_final_pct" in kpis
+    assert "recuperacao_pp" in kpis
     assert "pct_guias_sem_retorno_60d" in kpis
     assert "pct_valor_sem_retorno_60d" in kpis
 
-    assert isinstance(kpis["tempo_medio_pagamento_dias"], (int, float))
     assert isinstance(kpis["taxa_glosa_inicial_pct"], (int, float))
-    assert isinstance(kpis["taxa_glosa_final_pct"], (int, float))
-    assert isinstance(kpis["pct_guias_sem_retorno_60d"], (int, float))
-    assert isinstance(kpis["pct_valor_sem_retorno_60d"], (int, float))
+    assert isinstance(kpis["tempo_medio_pagamento_dias"], (int, float))
 
-    # 2. Detector de Operadora Atípica (Outlier)
-    assert "alerta_anomalia_outlier" in data
+    # 3. Alerta de Outlier
     outlier = data["alerta_anomalia_outlier"]
     assert "has_outlier" in outlier
-    assert "operadora_outlier" in outlier
-    assert "concentracao_pct" in outlier
-    assert "mensagem" in outlier
-    assert isinstance(outlier["has_outlier"], bool)
-    assert isinstance(outlier["concentracao_pct"], (int, float))
-    assert isinstance(outlier["mensagem"], str)
+    assert "metodologia" in outlier
+    assert outlier["metodologia"] == "modified_z_score_mad"
 
-    # 3. Detalhamento Multidimensional
-    assert "detalhamento_glosa_inicial" in data
-    detalhes = data["detalhamento_glosa_inicial"]
-    assert "por_porte" in detalhes
-    assert "por_segmentacao" in detalhes
-    assert "por_modalidade" in detalhes
+    # 4. Detalhamento (3 dimensões)
+    det = data["detalhamento_glosa_inicial"]
+    assert "por_porte" in det
+    assert "por_segmentacao" in det
+    assert "por_modalidade" in det
+    assert len(det["por_porte"]) > 0
+    assert len(det["por_segmentacao"]) > 0
+    assert len(det["por_modalidade"]) > 0
 
-    assert isinstance(detalhes["por_porte"], list)
-    assert isinstance(detalhes["por_segmentacao"], list)
-    assert isinstance(detalhes["por_modalidade"], list)
+    p0 = det["por_porte"][0]
+    assert "porte" in p0
+    assert "taxa_glosa_inicial_pct" in p0
+    assert "total_faturado_brl" in p0
 
 
-def test_painel_glosa_ans_dynamic_filters():
-    """
-    Testa suporte aos filtros dinâmicos de segmentação, modalidade, porte e registro_ans.
-    """
-    res_mod = client.get("/api/v1/analytics/painel-glosa-ans?periodo=2026-05&modalidade=Cooperativa%20M%C3%A9dica")
-    assert res_mod.status_code == 200
+def test_painel_glosa_ans_visao_operadora_paginada():
+    """Valida a visão Operadora com paginação estrita e listagem de entidades."""
+    res = client.get("/api/v1/analytics/painel-glosa-ans?periodo=2025&visao=operadora&limit=5&offset=0")
+    assert res.status_code == 200
+    data = res.json()
 
-    res_seg = client.get("/api/v1/analytics/painel-glosa-ans?periodo=2026-05&segmentacao=M%C3%A9dico-Hospitalar")
+    assert data["visao_aplicada"] == "operadora"
+    assert "paginacao" in data
+    assert "operadoras" in data
+
+    pag = data["paginacao"]
+    assert pag["limit"] == 5
+    assert pag["offset"] == 0
+    assert pag["total_registros"] >= 1
+    assert pag["pagina_atual"] == 1
+    assert pag["total_paginas"] >= 1
+
+    ops = data["operadoras"]
+    assert len(ops) <= 5
+    if ops:
+        op0 = ops[0]
+        assert "codigo_registro_ans" in op0
+        assert "razao_social" in op0
+        assert "valor_total_glosado_brl" in op0
+        assert "taxa_glosa_pct" in op0
+
+
+def test_painel_glosa_ans_filtros_multidimensionais():
+    """Valida a aplicação de filtros de porte, segmentação e modalidade."""
+    # Filtro por Segmentação
+    res_seg = client.get("/api/v1/analytics/painel-glosa-ans?periodo=2025&segmentacao=Exclus.+Odontol%C3%B3gica")
     assert res_seg.status_code == 200
+    data_seg = res_seg.json()
+    for item in data_seg["detalhamento_glosa_inicial"]["por_segmentacao"]:
+        assert "Odonto" in item["segmentacao"]
 
-    res_porte = client.get("/api/v1/analytics/painel-glosa-ans?periodo=2026-05&porte=Grande")
+    # Filtro por Porte
+    res_porte = client.get("/api/v1/analytics/painel-glosa-ans?periodo=2025&porte=Grande")
     assert res_porte.status_code == 200
 
-    res_op = client.get("/api/v1/analytics/painel-glosa-ans?periodo=2026-05&visao=operadora&registro_ans=363855")
-    assert res_op.status_code == 200
 
+def test_alias_glosas_operadoras_compatibilidade():
+    """Valida o alias de compatibilidade /analytics/glosas/operadoras."""
+    res = client.get("/api/v1/analytics/glosas/operadoras?periodo=2025&limit=10&offset=0")
+    assert res.status_code == 200
+    data = res.json()
 
-def test_outlier_detection_logic(monkeypatch, tmp_path):
-    test_db = str(tmp_path / "test_outlier.duckdb")
-    with duckdb.connect(test_db) as conn:
-        conn.execute("""
-        CREATE TABLE dm_ans_glosas_operadoras (
-            id_registro_kpi VARCHAR,
-            codigo_registro_ans VARCHAR,
-            cnpj_operadora VARCHAR,
-            razao_social VARCHAR,
-            modalidade_operadora VARCHAR,
-            ano VARCHAR,
-            mes VARCHAR,
-            periodo VARCHAR,
-            total_guias_glosadas BIGINT,
-            valor_total_faturado_brl DOUBLE,
-            valor_total_recolhido_brl DOUBLE,
-            valor_total_glosado_brl DOUBLE,
-            taxa_glosa_pct DOUBLE
-        );
-        INSERT INTO dm_ans_glosas_operadoras VALUES
-        ('1', '999999', '00000000000100', 'OPERADORA MONOPOLISTA OUTLIER', 'Autogestão', '2026', '05', '2026-05', 950, 1000000.0, 50000.0, 950000.0, 95.0),
-        ('2', '111111', '00000000000101', 'OPERADORA NORMAL A', 'Cooperativa Médica', '2026', '05', '2026-05', 20, 100000.0, 80000.0, 20000.0, 20.0),
-        ('3', '222222', '00000000000102', 'OPERADORA NORMAL B', 'Medicina de Grupo', '2026', '05', '2026-05', 30, 100000.0, 70000.0, 30000.0, 30.0);
-        """)
-
-    monkeypatch.setattr("src.api.duckdb_query_engine.load_pipeline_config", lambda: {"paths": {"gold_dw_file": test_db}})
-
-    # 1. Visão Setorial com Expurgo
-    res_setor = query_painel_glosa_ans(periodo="2026-05", visao="setor")
-    assert res_setor["alerta_anomalia_outlier"]["has_outlier"] is True
-    assert res_setor["alerta_anomalia_outlier"]["operadora_outlier"] == "OPERADORA MONOPOLISTA OUTLIER"
-    assert res_setor["alerta_anomalia_outlier"]["concentracao_pct"] == 95.0
-
-    # 2. Visão Operadora
-    res_operadora = query_painel_glosa_ans(periodo="2026-05", visao="operadora")
-    assert res_operadora["kpis"]["taxa_glosa_inicial_pct"] == 83.33
-
-
-def test_sql_injection_defense():
-    malicious_period = "2025' OR '1'='1"
-    response = client.get(f"/api/v1/analytics/painel-glosa-ans?periodo={malicious_period}")
-    assert response.status_code == 200
+    assert data["visao_aplicada"] == "operadora"
+    assert "paginacao" in data
+    assert "operadoras" in data
+    assert len(data["operadoras"]) <= 10

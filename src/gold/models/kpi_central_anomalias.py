@@ -14,7 +14,7 @@ logger = get_logger(__name__)
 
 def get_central_anomalias_sql(fct_internacao_source: str = "fct_internacao", min_proc_count: int = 5) -> str:
     """
-    Retorna a query SQL DuckDB que computa percentis (P90, P99) e detecta as 3 regras canônicas de anomalia.
+    Retorna a query SQL DuckDB que computa percentis (P90, P99) e detecta as regras canônicas de anomalia da Central de Anomalias.
     """
     return f"""
     WITH stats_procedimentos AS (
@@ -28,16 +28,41 @@ def get_central_anomalias_sql(fct_internacao_source: str = "fct_internacao", min
         GROUP BY codigo_procedimento_realizado
         HAVING COUNT(*) >= {min_proc_count}
     )
-    -- Regra 1: Outliers de Custo Extremo (> P99)
+    -- Regra 1: Divergência de Procedimento (PROC_SOLIC != PROC_REA)
+    SELECT
+        md5(concat_ws('-', CAST(f.numero_aih AS VARCHAR), 'DIVERGENCIA_PROC')) AS id_alerta,
+        f.numero_aih,
+        f.codigo_estabelecimento_cnes,
+        f.uf,
+        COALESCE(f.ano || '-' || f.mes, '2026-05') AS periodo,
+        f.codigo_procedimento_realizado,
+        'DIVERGENCIA_PROCEDIMENTO' AS tipo_anomalia,
+        'CRITICA' AS severidade,
+        f.valor_total_brl AS valor_faturado_brl,
+        COALESCE(s.p90_custo, f.valor_total_brl) AS custo_esperado_brl,
+        COALESCE(f.valor_total_brl, 0.0) AS excesso_custo_brl,
+        'NOVA' AS status_operacional,
+        CURRENT_TIMESTAMP AS data_geracao,
+        CURRENT_TIMESTAMP AS criado_em,
+        'v1.0' AS versao_regra
+    FROM {fct_internacao_source} f
+    LEFT JOIN stats_procedimentos s ON f.codigo_procedimento_realizado = s.codigo_procedimento_realizado
+    WHERE f.codigo_procedimento_solicitado IS NOT NULL 
+      AND f.codigo_procedimento_solicitado != f.codigo_procedimento_realizado
+      AND f.codigo_procedimento_solicitado != ''
+
+    UNION ALL
+
+    -- Regra 2: Outliers de Custo Extremo (> P99)
     SELECT
         md5(concat_ws('-', CAST(f.numero_aih AS VARCHAR), 'ANOMALIA_CUSTO_P99')) AS id_alerta,
         f.numero_aih,
         f.codigo_estabelecimento_cnes,
         f.uf,
-        '2026-05' AS periodo,
+        COALESCE(f.ano || '-' || f.mes, '2026-05') AS periodo,
         f.codigo_procedimento_realizado,
         'OUTLIER_CUSTO_P99' AS tipo_anomalia,
-        'ALTA' AS severidade,
+        'CRITICA' AS severidade,
         f.valor_total_brl AS valor_faturado_brl,
         s.p90_custo AS custo_esperado_brl,
         GREATEST(0.0, f.valor_total_brl - s.p90_custo) AS excesso_custo_brl,
@@ -51,13 +76,35 @@ def get_central_anomalias_sql(fct_internacao_source: str = "fct_internacao", min
 
     UNION ALL
 
-    -- Regra 2: AIHs Iniciais com Valor Total Zero
+    -- Regra 3: Glosas / Diárias Excessivas de UTI / Incompatibilidades
+    SELECT
+        md5(concat_ws('-', CAST(f.numero_aih AS VARCHAR), 'GLOSA_UTI')) AS id_alerta,
+        f.numero_aih,
+        f.codigo_estabelecimento_cnes,
+        f.uf,
+        COALESCE(f.ano || '-' || f.mes, '2026-05') AS periodo,
+        f.codigo_procedimento_realizado,
+        'GLOSA_SUS' AS tipo_anomalia,
+        'ALTA' AS severidade,
+        f.valor_total_brl AS valor_faturado_brl,
+        f.valor_servicos_hospitalares_brl AS custo_esperado_brl,
+        COALESCE(f.valor_uti_brl, f.valor_total_brl) AS excesso_custo_brl,
+        'NOVA' AS status_operacional,
+        CURRENT_TIMESTAMP AS data_geracao,
+        CURRENT_TIMESTAMP AS criado_em,
+        'v1.0' AS versao_regra
+    FROM {fct_internacao_source} f
+    WHERE f.valor_uti_brl > 0 AND f.dias_permanencia_real > 25
+
+    UNION ALL
+
+    -- Regra 4: AIHs Iniciais com Valor Total Zero
     SELECT
         md5(concat_ws('-', CAST(f.numero_aih AS VARCHAR), 'VALOR_ZERO')) AS id_alerta,
         f.numero_aih,
         f.codigo_estabelecimento_cnes,
         f.uf,
-        '2026-05' AS periodo,
+        COALESCE(f.ano || '-' || f.mes, '2026-05') AS periodo,
         f.codigo_procedimento_realizado,
         'AIH_VALOR_ZERO' AS tipo_anomalia,
         'MEDIA' AS severidade,
@@ -73,13 +120,13 @@ def get_central_anomalias_sql(fct_internacao_source: str = "fct_internacao", min
 
     UNION ALL
 
-    -- Regra 3: Óbitos Imediatos / Permanência Zero
+    -- Regra 5: Óbitos Imediatos / Permanência Zero
     SELECT
         md5(concat_ws('-', CAST(f.numero_aih AS VARCHAR), 'OBITO_IMEDIATO')) AS id_alerta,
         f.numero_aih,
         f.codigo_estabelecimento_cnes,
         f.uf,
-        '2026-05' AS periodo,
+        COALESCE(f.ano || '-' || f.mes, '2026-05') AS periodo,
         f.codigo_procedimento_realizado,
         'OBITO_PERMANENCIA_ZERO' AS tipo_anomalia,
         'CRITICA' AS severidade,

@@ -8,6 +8,7 @@ from src.api.cache import (
     cached_query,
     cached_dashboard_financeiro,
     cached_central_anomalias,
+    cached_drilldown_anomalia,
     cached_painel_glosa_ans,
     cached_anomalias_paginadas,
     cached_hospitais_eficiencia,
@@ -89,6 +90,44 @@ async def get_central_anomalias_grid(
     )
 
 
+@router.get("/analytics/central-anomalias/{id_alerta}")
+async def get_drilldown_central_anomalia(
+    id_alerta: str,
+    request: Request,
+) -> Any:
+    """
+    Retorna o detalhamento aprofundado de um alerta individual para o modal de Drilldown:
+    1. Dados do alerta e regra violada;
+    2. Contexto do estabelecimento hospitalar e município do IBGE;
+    3. Evolução temporal histórica no hospital;
+    4. Amostra de AIHs correlacionadas para auditoria;
+    5. Ações operacionais disponíveis.
+    """
+    clean_id = _sanitize_param(id_alerta) or ""
+    return cached_drilldown_anomalia(id_alerta=clean_id, request=request)
+
+
+@router.patch("/analytics/central-anomalias/{id_alerta}/status")
+async def update_status_central_anomalia(
+    id_alerta: str,
+    status: str = Query(..., description="Novo status operacional ('NOVA', 'EM_ANALISE', 'RESOLVIDA', 'IGNORADA')"),
+) -> Dict[str, Any]:
+    """
+    Atualiza transacionalmente o status de uma anomalia (workflow de auditoria) e invalida o cache do período.
+    """
+    clean_id = _sanitize_param(id_alerta) or ""
+    clean_status = _sanitize_param(status) or ""
+    
+    from src.api.duckdb_query_engine import update_anomalia_status
+    from src.api.cache import invalidate_cache_for_period
+    
+    resultado = update_anomalia_status(id_alerta=clean_id, novo_status=clean_status)
+    if resultado.get("sucesso") and resultado.get("periodo"):
+        invalidate_cache_for_period(resultado["periodo"])
+        
+    return resultado
+
+
 @router.get("/analytics/painel-glosa-ans")
 async def get_painel_glosa_ans(
     request: Request,
@@ -98,12 +137,17 @@ async def get_painel_glosa_ans(
     modalidade: Optional[str] = Query(None, description="Modalidade da operadora (ex: 'Cooperativa Médica', 'Autogestão')"),
     porte: Optional[str] = Query(None, description="Porte da operadora: 'Grande', 'Médio', 'Pequeno'"),
     registro_ans: Optional[str] = Query(None, description="Código de Registro ANS da operadora"),
+    limit: int = Query(50, ge=1, le=200, description="Limite de registros para listagem paginada (visão operadora)"),
+    offset: int = Query(0, ge=0, description="Offset de paginação"),
+    threshold_mad: float = Query(3.5, ge=1.0, le=10.0, description="Threshold de Modified Z-score MAD para detecção de anomalia"),
+    threshold_concentracao: float = Query(50.0, ge=10.0, le=100.0, description="Threshold de concentração setorial (%)"),
 ) -> Any:
     """
     Retorna 100% dos dados para a tela de Glosa Operadora (ANS) em uma única requisição HTTP:
     1. Os 5 Cards Superiores de KPI (Tempo Médio Pagamento, % Glosa Inicial, % Glosa Final, % Guias s/ Retorno 60d, % Valor s/ Retorno 60d);
-    2. Detector de Operadora Atípica / Outlier (>90% de concentração com expurgo na média setorial);
-    3. Detalhamento Multidimensional de % Glosa Inicial (por Porte, por Segmentação, por Modalidade).
+    2. Detector Robusto de Operadora Atípica / Outlier via Modified Z-Score (MAD) com expurgo na média setorial;
+    3. Detalhamento Multidimensional de % Glosa Inicial (por Porte, por Segmentação, por Modalidade);
+    4. Paginação estrita quando visao='operadora'.
     """
     p = _sanitize_periodo(periodo) if periodo else ""
     v = _sanitize_param(visao) or "setor"
@@ -119,6 +163,10 @@ async def get_painel_glosa_ans(
         modalidade=mod,
         porte=por,
         registro_ans=ans,
+        limit=limit,
+        offset=offset,
+        threshold_mad=threshold_mad,
+        threshold_concentracao_pct=threshold_concentracao,
         request=request,
     )
 
@@ -127,11 +175,18 @@ async def get_painel_glosa_ans(
 async def get_glosas_operadoras(
     request: Request,
     periodo: str = Query(..., description="Competência no formato YYYY-MM (ex: '2026-05')"),
+    limit: int = Query(50, ge=1, le=200, description="Limite de registros"),
+    offset: int = Query(0, ge=0, description="Offset de paginação"),
 ) -> Any:
-    """Retorna indicadores consolidados de glosas por operadora de saúde (ANS/TISS)."""
+    """Alias de compatibilidade que redireciona internamente para o endpoint oficial painel-glosa-ans (visao=operadora)."""
     p = _sanitize_periodo(periodo)
-    sql = f"SELECT * FROM dm_ans_glosas_operadoras WHERE periodo = '{p}' ORDER BY taxa_glosa_pct DESC"
-    return cached_query(sql, periodo=p, request=request)
+    return cached_painel_glosa_ans(
+        periodo=p,
+        visao="operadora",
+        limit=limit,
+        offset=offset,
+        request=request,
+    )
 
 
 @router.get("/analytics/glosas/auditoria")

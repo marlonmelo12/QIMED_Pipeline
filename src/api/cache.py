@@ -449,6 +449,20 @@ def cached_central_anomalias(
     )
 
 
+def cached_drilldown_anomalia(
+    id_alerta: str,
+    request: Optional[Request] = None,
+) -> Union[Response, Dict[str, Any]]:
+    key = _generate_cache_key("drilldown_anomalia", id_alerta)
+    return serve_cached_http_response(
+        request=request,
+        key=key,
+        cache_period="",
+        builder_func=query_engine.query_drilldown_anomalia,
+        id_alerta=id_alerta,
+    )
+
+
 def cached_painel_glosa_ans(
     periodo: str = "",
     visao: str = "setor",
@@ -456,9 +470,25 @@ def cached_painel_glosa_ans(
     modalidade: Optional[str] = None,
     porte: Optional[str] = None,
     registro_ans: Optional[str] = None,
+    limit: int = 50,
+    offset: int = 0,
+    threshold_mad: float = 3.5,
+    threshold_concentracao_pct: float = 50.0,
     request: Optional[Request] = None,
 ) -> Union[Response, Dict[str, Any]]:
-    key = _generate_cache_key("painel_glosa_ans", periodo, visao, segmentacao, modalidade, porte, registro_ans)
+    key = _generate_cache_key(
+        "painel_glosa_ans",
+        periodo,
+        visao,
+        segmentacao,
+        modalidade,
+        porte,
+        registro_ans,
+        limit,
+        offset,
+        threshold_mad,
+        threshold_concentracao_pct,
+    )
     return serve_cached_http_response(
         request=request,
         key=key,
@@ -470,6 +500,10 @@ def cached_painel_glosa_ans(
         modalidade=modalidade,
         porte=porte,
         registro_ans=registro_ans,
+        limit=limit,
+        offset=offset,
+        threshold_mad=threshold_mad,
+        threshold_concentracao_pct=threshold_concentracao_pct,
     )
 
 
