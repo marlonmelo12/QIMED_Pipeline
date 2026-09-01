@@ -63,12 +63,11 @@ notebooks/
 *.sqlite
 *.sqlite3
 
-# DuckDB Warehouse (binários gerados por execução)
-warehouse/*.duckdb
+# DuckDB Warehouse
 warehouse/*.duckdb.wal
 warehouse/*.tmp
-*.duckdb
 *.duckdb.wal
+!warehouse/qimed_dw.duckdb
 
 # Parquets gerados (Preserva tabelas de domínio estáticas em config/)
 *.parquet
