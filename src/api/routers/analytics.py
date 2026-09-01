@@ -1,17 +1,17 @@
 """
 Endpoints analíticos da camada Gold do QIMED Lakehouse.
-Consultas somente leitura com cache em memória e sanitização de parâmetros.
-
-Todas as tabelas dm_* possuem coluna `periodo` no formato 'YYYY-MM'.
-NÃO use colunas `ano`/`mes` separadas aqui — essas existem apenas na Silver.
+Rotas async de altíssimo desempenho com cache pré-serializado (orjson), pré-comprimido (gzip) e single-flight.
 """
-from typing import Any, Dict, Optional
-from fastapi import APIRouter, Query
+from typing import Any, Dict, List, Optional, Union
+from fastapi import APIRouter, Query, Request, Response
 from src.api.cache import (
     cached_query,
     cached_dashboard_financeiro,
     cached_central_anomalias,
     cached_painel_glosa_ans,
+    cached_anomalias_paginadas,
+    cached_hospitais_eficiencia,
+    get_cache_stats,
 )
 
 router = APIRouter(tags=["Analytics"])
@@ -33,10 +33,11 @@ def _sanitize_param(val: Optional[str]) -> Optional[str]:
 
 
 @router.get("/analytics/dashboard/financeiro")
-def get_dashboard_financeiro(
+async def get_dashboard_financeiro(
+    request: Request,
     periodo: str = Query(..., description="Competência no formato YYYY-MM (ex: '2026-05')"),
     uf: Optional[str] = Query(None, description="Sigla da UF opcional com 2 caracteres (ex: 'CE')"),
-) -> Dict[str, Any]:
+) -> Any:
     """
     Retorna os dados consolidados para todos os widgets do Dashboard Financeiro em uma única requisição:
     1. Cards Superiores de KPI (Ticket Médio, Mediana, Custo Total, Razão Óbito vs Alta, Taxa de Glosa);
@@ -46,11 +47,12 @@ def get_dashboard_financeiro(
     """
     p = _sanitize_periodo(periodo)
     u = _sanitize_uf(uf) if uf else ""
-    return cached_dashboard_financeiro(periodo=p, uf=u)
+    return cached_dashboard_financeiro(periodo=p, uf=u, request=request)
 
 
 @router.get("/analytics/central-anomalias")
-def get_central_anomalias_grid(
+async def get_central_anomalias_grid(
+    request: Request,
     periodo: str = Query(..., description="Competência no formato YYYY-MM (ex: '2026-05')"),
     tipo: Optional[str] = Query(None, description="Filtro por tipo de anomalia (ex: 'OUTLIER_CUSTO_P99', 'AIH_VALOR_ZERO')"),
     prioridade: Optional[str] = Query(None, description="Filtro por prioridade/severidade (ex: 'CRITICA', 'ALTA', 'MEDIA')"),
@@ -60,7 +62,7 @@ def get_central_anomalias_grid(
     search: Optional[str] = Query(None, description="Busca textual por AIH, CNES, UF ou descrição"),
     limit: int = Query(20, ge=1, le=200, description="Quantidade de registros por página"),
     offset: int = Query(0, ge=0, description="Offset da paginação"),
-) -> Dict[str, Any]:
+) -> Any:
     """
     Retorna 100% dos dados para a tela operacional da Central de Anomalias (SIH):
     1. Cards Superiores de KPI (Anomalias Abertas, Valor em Risco, Taxa de Rejeição, Hospitais Afetados);
@@ -83,18 +85,20 @@ def get_central_anomalias_grid(
         search=s,
         limit=limit,
         offset=offset,
+        request=request,
     )
 
 
 @router.get("/analytics/painel-glosa-ans")
-def get_painel_glosa_ans(
+async def get_painel_glosa_ans(
+    request: Request,
     periodo: Optional[str] = Query(None, description="Competência ou Ano (ex: '2025', '2026-05')"),
     visao: str = Query("setor", description="Visão analítica: 'setor' (com expurgo de outlier) ou 'operadora'"),
     segmentacao: Optional[str] = Query(None, description="Segmentação: 'Médico-Hospitalar' ou 'Odontológico'"),
     modalidade: Optional[str] = Query(None, description="Modalidade da operadora (ex: 'Cooperativa Médica', 'Autogestão')"),
     porte: Optional[str] = Query(None, description="Porte da operadora: 'Grande', 'Médio', 'Pequeno'"),
     registro_ans: Optional[str] = Query(None, description="Código de Registro ANS da operadora"),
-) -> Dict[str, Any]:
+) -> Any:
     """
     Retorna 100% dos dados para a tela de Glosa Operadora (ANS) em uma única requisição HTTP:
     1. Os 5 Cards Superiores de KPI (Tempo Médio Pagamento, % Glosa Inicial, % Glosa Final, % Guias s/ Retorno 60d, % Valor s/ Retorno 60d);
@@ -115,61 +119,74 @@ def get_painel_glosa_ans(
         modalidade=mod,
         porte=por,
         registro_ans=ans,
+        request=request,
     )
 
 
 @router.get("/analytics/glosas/operadoras")
-def get_glosas_operadoras(
+async def get_glosas_operadoras(
+    request: Request,
     periodo: str = Query(..., description="Competência no formato YYYY-MM (ex: '2026-05')"),
-) -> list[dict]:
+) -> Any:
     """Retorna indicadores consolidados de glosas por operadora de saúde (ANS/TISS)."""
     p = _sanitize_periodo(periodo)
     sql = f"SELECT * FROM dm_ans_glosas_operadoras WHERE periodo = '{p}' ORDER BY taxa_glosa_pct DESC"
-    return cached_query(sql)
+    return cached_query(sql, periodo=p, request=request)
 
 
 @router.get("/analytics/glosas/auditoria")
-def get_glosas_auditoria(
+async def get_glosas_auditoria(
+    request: Request,
     periodo: str = Query(..., description="Competência no formato YYYY-MM (ex: '2026-05')"),
     uf: str = Query(..., description="Sigla da UF com 2 caracteres (ex: 'CE')"),
-) -> list[dict]:
+) -> Any:
     """Retorna motivos e volumes de glosas hospitalares auditadas por UF."""
     p = _sanitize_periodo(periodo)
     u = _sanitize_uf(uf)
     sql = f"SELECT * FROM dm_glosas_auditoria WHERE uf = '{u}' AND periodo = '{p}'"
-    return cached_query(sql)
+    return cached_query(sql, periodo=p, request=request)
 
 
 @router.get("/analytics/hospitais/eficiencia")
-def get_hospitais_eficiencia(
+async def get_hospitais_eficiencia(
+    request: Request,
     periodo: str = Query(..., description="Competência no formato YYYY-MM (ex: '2026-05')"),
     uf: str = Query(..., description="Sigla da UF com 2 caracteres (ex: 'CE')"),
-) -> list[dict]:
-    """Retorna métricas de eficiência hospitalar, ocupação e mortalidade por estabelecimento."""
+    limit: Optional[int] = Query(None, ge=1, le=200, description="Limite opcional de registros por página"),
+    offset: int = Query(0, ge=0, description="Offset da paginação"),
+) -> Any:
+    """Retorna métricas de eficiência hospitalar, ocupação e mortalidade por estabelecimento com suporte a paginação."""
     p = _sanitize_periodo(periodo)
     u = _sanitize_uf(uf)
-    sql = f"SELECT * FROM dm_hospital_efficiency WHERE uf = '{u}' AND periodo = '{p}'"
-    return cached_query(sql)
+    return cached_hospitais_eficiencia(periodo=p, uf=u, limit=limit, offset=offset, request=request)
 
 
 @router.get("/analytics/icsap")
-def get_icsap(
+async def get_icsap(
+    request: Request,
     periodo: str = Query(..., description="Competência no formato YYYY-MM (ex: '2026-05')"),
     uf: str = Query(..., description="Sigla da UF com 2 caracteres (ex: 'CE')"),
-) -> list[dict]:
+) -> Any:
     """Retorna indicadores de Internações por Condições Sensíveis à Atenção Primária (ICSAP)."""
     p = _sanitize_periodo(periodo)
     u = _sanitize_uf(uf)
     sql = f"SELECT * FROM dm_icsap_prevention WHERE uf = '{u}' AND periodo = '{p}'"
-    return cached_query(sql)
+    return cached_query(sql, periodo=p, request=request)
 
 
 @router.get("/analytics/anomalias")
-def get_anomalias(
+async def get_anomalias(
+    request: Request,
     periodo: str = Query(..., description="Competência no formato YYYY-MM (ex: '2026-05')"),
-) -> list[dict]:
-    """Retorna alertas forenses e anomalias de custo faturado (P99)."""
+    limit: int = Query(50, ge=1, le=200, description="Quantidade máxima de anomalias por página (teto: 200)"),
+    offset: int = Query(0, ge=0, description="Offset de paginação"),
+) -> Any:
+    """Retorna alertas forenses e anomalias de custo faturado (P99) com paginação estrita."""
     p = _sanitize_periodo(periodo)
-    sql = f"SELECT * FROM aud_alertas_anomalias WHERE periodo = '{p}' ORDER BY criado_em DESC"
-    return cached_query(sql)
+    return cached_anomalias_paginadas(periodo=p, limit=limit, offset=offset, request=request)
 
+
+@router.get("/analytics/cache/stats")
+async def get_cache_observability_stats() -> Dict[str, Any]:
+    """Retorna métricas de telemetria, taxa de acerto de cache, tempo de reconstrução e memória L1."""
+    return get_cache_stats()

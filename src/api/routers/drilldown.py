@@ -1,9 +1,9 @@
-"""
+﻿"""
 Router de Drill-Down Analítico - QIMED Health Platform (BFF Pattern).
 Fornece dados aprofundados para as telas de detalhe de KPIs em uma única requisição HTTP.
 """
-from typing import Any, Dict, Optional
-from fastapi import APIRouter, Query
+from typing import Any, Dict, Optional, Union
+from fastapi import APIRouter, Query, Request, Response
 from src.api.cache import (
     cached_drilldown_ticket_medio,
     cached_drilldown_custo_total,
@@ -24,12 +24,13 @@ def _sanitize_uf(uf: str) -> str:
 
 
 @router.get("/ticket-medio")
-def get_drilldown_ticket_medio(
+async def get_drilldown_ticket_medio(
+    request: Request,
     periodo: str = Query(..., description="Competência no formato YYYY-MM (ex: '2026-05')"),
     uf: Optional[str] = Query(None, description="Sigla da UF opcional com 2 caracteres (ex: 'CE')"),
     limit: int = Query(50, ge=1, le=500, description="Limite de registros para ranking hospitalar"),
     offset: int = Query(0, ge=0, description="Offset de paginação"),
-) -> Dict[str, Any]:
+) -> Any:
     """
     Retorna o detalhamento aprofundado do Ticket Médio Hospitalar:
     - KPIs Estatísticos (Média, Mediana, P75, Máx, Mín, Desvio Padrão);
@@ -40,16 +41,17 @@ def get_drilldown_ticket_medio(
     """
     p = _sanitize_periodo(periodo)
     u = _sanitize_uf(uf) if uf else ""
-    return cached_drilldown_ticket_medio(periodo=p, uf=u, limit=limit, offset=offset)
+    return cached_drilldown_ticket_medio(periodo=p, uf=u, limit=limit, offset=offset, request=request)
 
 
 @router.get("/custo-total")
-def get_drilldown_custo_total(
+async def get_drilldown_custo_total(
+    request: Request,
     periodo: str = Query(..., description="Competência no formato YYYY-MM (ex: '2026-05')"),
     uf: Optional[str] = Query(None, description="Sigla da UF opcional com 2 caracteres (ex: 'CE')"),
     limit: int = Query(50, ge=1, le=500, description="Limite de registros para ranking hospitalar"),
     offset: int = Query(0, ge=0, description="Offset de paginação"),
-) -> Dict[str, Any]:
+) -> Any:
     """
     Retorna o detalhamento aprofundado do Custo Total Hospitalar:
     - Decomposição SH (Serviços Hospitalares) vs. SP (Serviços Profissionais) vs. UTI;
@@ -59,16 +61,17 @@ def get_drilldown_custo_total(
     """
     p = _sanitize_periodo(periodo)
     u = _sanitize_uf(uf) if uf else ""
-    return cached_drilldown_custo_total(periodo=p, uf=u, limit=limit, offset=offset)
+    return cached_drilldown_custo_total(periodo=p, uf=u, limit=limit, offset=offset, request=request)
 
 
 @router.get("/custo-desfecho")
-def get_drilldown_custo_desfecho(
+async def get_drilldown_custo_desfecho(
+    request: Request,
     periodo: str = Query(..., description="Competência no formato YYYY-MM (ex: '2026-05')"),
     uf: Optional[str] = Query(None, description="Sigla da UF opcional com 2 caracteres (ex: 'CE')"),
     limit: int = Query(50, ge=1, le=500, description="Limite de registros para ranking hospitalar"),
     offset: int = Query(0, ge=0, description="Offset de paginação"),
-) -> Dict[str, Any]:
+) -> Any:
     """
     Retorna o detalhamento aprofundado de Custo por Desfecho (Óbito vs. Alta):
     - Métricas comparativas de óbito vs alta (volume, custo total, custo médio, permanência média, razão de custo);
@@ -78,4 +81,4 @@ def get_drilldown_custo_desfecho(
     """
     p = _sanitize_periodo(periodo)
     u = _sanitize_uf(uf) if uf else ""
-    return cached_drilldown_custo_desfecho(periodo=p, uf=u, limit=limit, offset=offset)
+    return cached_drilldown_custo_desfecho(periodo=p, uf=u, limit=limit, offset=offset, request=request)

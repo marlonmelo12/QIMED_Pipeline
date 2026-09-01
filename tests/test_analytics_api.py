@@ -189,12 +189,14 @@ def test_get_icsap(mock_duckdb):
 
 
 def test_get_anomalias(mock_duckdb):
-    """Valida endpoint /api/v1/analytics/anomalias."""
+    """Valida endpoint /api/v1/analytics/anomalias com suporte a paginação."""
     response = client.get("/api/v1/analytics/anomalias?periodo=2026-05")
     assert response.status_code == 200
     data = response.json()
-    assert isinstance(data, list)
-    assert len(data) == 1
+    assert isinstance(data, dict)
+    assert "paginacao" in data
+    assert "itens" in data
+    assert len(data["itens"]) >= 0
 
 
 def test_sql_injection_sanitization(monkeypatch, tmp_path):

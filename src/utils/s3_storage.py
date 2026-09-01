@@ -136,24 +136,35 @@ def configure_duckdb_s3(conn: duckdb.DuckDBPyConnection) -> None:
         safe_endpoint = clean_endpoint.replace("'", "''")
         safe_region = region.replace("'", "''")
 
-        secret_sql = f"""
-        CREATE OR REPLACE SECRET s3_creds (
-            TYPE S3,
-            KEY_ID '{safe_key}',
-            SECRET '{safe_secret}',
-            ENDPOINT '{safe_endpoint}',
-            USE_SSL {use_ssl},
-            URL_STYLE 'path',
-            REGION '{safe_region}'
-        );
-        """
-        conn.execute(secret_sql)
+        conn.execute(f"SET s3_endpoint='{clean_endpoint}';")
+        conn.execute(f"SET s3_access_key_id='{safe_key}';")
+        conn.execute(f"SET s3_secret_access_key='{safe_secret}';")
+        conn.execute(f"SET s3_use_ssl={str(use_ssl).lower()};")
+        conn.execute("SET s3_url_style='path';")
+        conn.execute(f"SET s3_region='{safe_region}';")
+
+        try:
+            secret_sql = f"""
+            CREATE OR REPLACE SECRET s3_creds (
+                TYPE S3,
+                KEY_ID '{safe_key}',
+                SECRET '{safe_secret}',
+                ENDPOINT '{safe_endpoint}',
+                USE_SSL {use_ssl},
+                URL_STYLE 'path',
+                REGION '{safe_region}'
+            );
+            """
+            conn.execute(secret_sql)
+        except Exception:
+            pass
+
         logger.debug(
-            f"[DuckDB S3] Extensao httpfs e Secret S3 configurados para MinIO em '{clean_endpoint}' "
+            f"[DuckDB S3] Extensao httpfs e S3 configurados para MinIO em '{clean_endpoint}' "
             f"(region={region}, ssl={use_ssl}, path_style=true)."
         )
     except Exception as e:
-        logger.warning(f"[DuckDB S3] Falha ao configurar httpfs/Secret no DuckDB: {e}")
+        logger.debug(f"[DuckDB S3] Falha ao configurar httpfs/S3 no DuckDB: {e}")
 
 
 

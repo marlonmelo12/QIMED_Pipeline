@@ -11,16 +11,10 @@ logger = setup_logger(__name__)
 
 
 def _connect_dw(read_only: bool = True):
-    """Abre conexao com o DuckDB DW Gold configurando credenciais S3/MinIO para Delta Lake."""
+    """Abre conexão com o DuckDB DW Gold local em modo somente leitura de alta performance."""
     cfg = load_pipeline_config()
     dw_path = cfg.get("paths", {}).get("gold_dw_file", "warehouse/qimed_dw.duckdb")
-    conn = duckdb.connect(dw_path, read_only=read_only)
-    try:
-        from src.utils.s3_storage import configure_duckdb_s3
-        configure_duckdb_s3(conn)
-    except Exception as e:
-        logger.warning(f"Aviso ao configurar credenciais S3 no DuckDB: {e}")
-    return conn
+    return duckdb.connect(dw_path, read_only=read_only)
 
 
 def query_gold(sql: str) -> list[dict]:
@@ -38,138 +32,190 @@ def query_gold(sql: str) -> list[dict]:
 
 def query_dashboard_financeiro(periodo: str, uf: str = "") -> Dict[str, Any]:
     """
-    Executa as 4 consultas consolidadas do Dashboard Financeiro em uma ÚNICA conexão DuckDB:
-    1. Cards de KPI (Ticket Médio, Mediana, Custo Total, Razão Óbito/Alta, Taxa Glosa);
-    2. Gráfico de Pareto de Glosas Hospitalares;
-    3. Gráfico de Permanência (Custo e dias por faixa);
-    4. Série Temporal (AIHs aprovadas vs rejeitadas).
+    Executa as consultas consolidadas do Dashboard Financeiro:
+    - Tenta carregar do Data Mart pré-agregado O(1) `dm_kpi_dashboard_financeiro`.
+    - Caso não exista (competência aberta), executa fallback dinâmico sobre `fct_internacao`.
     """
-    cfg = load_pipeline_config()
-    dw_path = cfg.get("paths", {}).get("gold_dw_file", "warehouse/qimed_dw.duckdb")
-
-    sql_kpi = f"""
-    WITH base_int AS (
-        SELECT valor_total_brl, indicador_obito
-        FROM fct_internacao
-        WHERE (CAST(ano AS VARCHAR) || '-' || LPAD(CAST(mes AS VARCHAR), 2, '0') = '{periodo}' OR CAST(ano AS VARCHAR) = '{periodo}')
-          AND ('{uf}' = '' OR uf = '{uf}')
-    ),
-    kpi_int AS (
-        SELECT
-            ROUND(COALESCE(AVG(valor_total_brl), 0.0), 2) AS ticket_medio_brl,
-            ROUND(COALESCE(MEDIAN(valor_total_brl), 0.0), 2) AS mediana_custo_brl,
-            ROUND(COALESCE(SUM(valor_total_brl), 0.0), 2) AS custo_total_brl,
-            ROUND(COALESCE(AVG(CASE WHEN indicador_obito = TRUE THEN valor_total_brl END), 0.0), 2) AS custo_medio_obito_brl,
-            ROUND(COALESCE(AVG(CASE WHEN indicador_obito = FALSE THEN valor_total_brl END), 0.0), 2) AS custo_medio_alta_brl,
-            ROUND(COALESCE(AVG(CASE WHEN indicador_obito = TRUE THEN valor_total_brl END) / NULLIF(AVG(CASE WHEN indicador_obito = FALSE THEN valor_total_brl END), 0), 0.0), 2) AS razao_custo_obito_alta
-        FROM base_int
-    ),
-    kpi_glosas AS (
-        SELECT
-            ROUND(COALESCE((SUM(total_glosado_brl) / NULLIF(SUM(total_faturado_brl), 0)) * 100.0, 0.0), 2) AS taxa_glosa_pct
-        FROM dm_glosas_auditoria
-        WHERE (periodo = '{periodo}' OR ano = '{periodo}')
-          AND ('{uf}' = '' OR uf = '{uf}')
-    )
-    SELECT 
-        kpi_int.ticket_medio_brl,
-        kpi_int.mediana_custo_brl,
-        kpi_int.custo_total_brl,
-        kpi_int.custo_medio_obito_brl,
-        kpi_int.custo_medio_alta_brl,
-        kpi_int.razao_custo_obito_alta,
-        COALESCE(kpi_glosas.taxa_glosa_pct, 0.0) AS taxa_glosa_pct
-    FROM kpi_int CROSS JOIN kpi_glosas;
-    """
-
-    sql_pareto = f"""
-    WITH motivos AS (
-        SELECT
-            codigo_motivo_glosa,
-            descricao_motivo_glosa,
-            SUM(total_procedimentos_glosados) AS total_glosas,
-            ROUND(SUM(total_glosado_brl), 2) AS valor_total_glosado_brl
-        FROM dm_glosas_auditoria
-        WHERE (periodo = '{periodo}' OR ano = '{periodo}')
-          AND ('{uf}' = '' OR uf = '{uf}')
-        GROUP BY codigo_motivo_glosa, descricao_motivo_glosa
-    ),
-    total_geral AS (
-        SELECT COALESCE(SUM(valor_total_glosado_brl), 0.0) AS soma_total FROM motivos
-    )
-    SELECT
-        m.codigo_motivo_glosa,
-        m.descricao_motivo_glosa,
-        m.total_glosas,
-        m.valor_total_glosado_brl,
-        ROUND((m.valor_total_glosado_brl / NULLIF(t.soma_total, 0)) * 100.0, 2) AS percentual_glosa_pct,
-        ROUND(SUM(m.valor_total_glosado_brl) OVER (ORDER BY m.valor_total_glosado_brl DESC ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) / NULLIF(t.soma_total, 0) * 100.0, 2) AS percentual_acumulado_pareto_pct
-    FROM motivos m CROSS JOIN total_geral t
-    ORDER BY m.valor_total_glosado_brl DESC
-    LIMIT 10;
-    """
-
-    sql_perm = f"""
-    SELECT
-        CASE 
-            WHEN dias_permanencia_real BETWEEN 0 AND 3 THEN '0-3d'
-            WHEN dias_permanencia_real BETWEEN 4 AND 7 THEN '4-7d'
-            WHEN dias_permanencia_real BETWEEN 8 AND 14 THEN '8-14d'
-            WHEN dias_permanencia_real BETWEEN 15 AND 30 THEN '15-30d'
-            ELSE '>30d'
-        END AS faixa_permanencia,
-        COUNT(*) AS total_internacoes,
-        ROUND(COALESCE(SUM(valor_total_brl), 0.0), 2) AS custo_total_brl,
-        ROUND(COALESCE(AVG(valor_total_brl), 0.0), 2) AS custo_medio_brl,
-        ROUND(COALESCE(AVG(dias_permanencia_real), 0.0), 1) AS media_dias_real
-    FROM fct_internacao
-    WHERE (CAST(ano AS VARCHAR) || '-' || LPAD(CAST(mes AS VARCHAR), 2, '0') = '{periodo}' OR CAST(ano AS VARCHAR) = '{periodo}')
-      AND ('{uf}' = '' OR uf = '{uf}')
-    GROUP BY faixa_permanencia
-    ORDER BY 
-        CASE faixa_permanencia
-            WHEN '0-3d' THEN 1
-            WHEN '4-7d' THEN 2
-            WHEN '8-14d' THEN 3
-            WHEN '15-30d' THEN 4
-            ELSE 5
-        END;
-    """
-
-    sql_serie = f"""
-    WITH aih_aprovadas AS (
-        SELECT
-            CAST(ano AS VARCHAR) || '-' || LPAD(CAST(mes AS VARCHAR), 2, '0') AS periodo,
-            COUNT(*) AS total_aihs_aprovadas,
-            ROUND(SUM(COALESCE(valor_total_brl, 0.0)), 2) AS valor_aprovado_brl
-        FROM fct_internacao
-        WHERE ('{uf}' = '' OR uf = '{uf}')
-        GROUP BY ano, mes
-    ),
-    aih_glosadas AS (
-        SELECT
-            periodo,
-            SUM(total_procedimentos_glosados) AS total_aihs_rejeitadas,
-            ROUND(SUM(total_glosado_brl), 2) AS valor_glosado_brl
-        FROM dm_glosas_auditoria
-        WHERE ('{uf}' = '' OR uf = '{uf}')
-        GROUP BY periodo
-    )
-    SELECT
-        COALESCE(a.periodo, g.periodo) AS periodo,
-        COALESCE(a.total_aihs_aprovadas, 0) AS total_aihs_aprovadas,
-        COALESCE(g.total_aihs_rejeitadas, 0) AS total_aihs_rejeitadas,
-        COALESCE(a.valor_aprovado_brl, 0.0) AS valor_aprovado_brl,
-        COALESCE(g.valor_glosado_brl, 0.0) AS valor_glosado_brl,
-        ROUND(COALESCE((COALESCE(g.total_aihs_rejeitadas, 0) * 100.0) / NULLIF(COALESCE(a.total_aihs_aprovadas, 0) + COALESCE(g.total_aihs_rejeitadas, 0), 0), 0.0), 2) AS taxa_rejeicao_pct
-    FROM aih_aprovadas a
-    FULL OUTER JOIN aih_glosadas g ON a.periodo = g.periodo
-    ORDER BY periodo ASC
-    LIMIT 6;
-    """
+    p = periodo.replace("'", "").strip()
+    u = uf.replace("'", "").strip().upper() if uf else ""
 
     try:
         with _connect_dw(read_only=True) as conn:
+            tables = [row[0] for row in conn.execute("SHOW TABLES;").fetchall()]
+            
+            # 1. Rota Ultrarrápida: Data Mart Pré-Agregado Gold (O(1))
+            if "dm_kpi_dashboard_financeiro" in tables:
+                sql_fast_kpi = f"SELECT * FROM dm_kpi_dashboard_financeiro WHERE periodo = '{p}' AND uf = '{u}'"
+                fast_kpi_rows = conn.execute(sql_fast_kpi).arrow().read_all().to_pylist()
+                if fast_kpi_rows:
+                    kpi_row = fast_kpi_rows[0]
+                    sql_perm_fast = f"SELECT faixa_permanencia, total_internacoes, custo_total_brl, ROUND(custo_total_brl / NULLIF(total_internacoes, 0), 2) AS custo_medio_brl, dias_medios AS media_dias_real FROM dm_kpi_permanencia_faixa WHERE periodo = '{p}' AND uf = '{u}' ORDER BY CASE faixa_permanencia WHEN '0-3d' THEN 1 WHEN '4-7d' THEN 2 WHEN '8-14d' THEN 3 ELSE 4 END"
+                    permanencia = conn.execute(sql_perm_fast).arrow().read_all().to_pylist() if "dm_kpi_permanencia_faixa" in tables else []
+                    
+                    sql_pareto = f"SELECT codigo_motivo_glosa, descricao_motivo_glosa, total_procedimentos_glosados AS total_glosas, valor_total_glosado_brl, 100.0 AS percentual_glosa_pct, 100.0 AS percentual_acumulado_pareto_pct FROM dm_glosas_auditoria WHERE (periodo = '{p}' OR ano = '{p}') AND ('{u}' = '' OR uf = '{u}') LIMIT 10;"
+                    pareto = conn.execute(sql_pareto).arrow().read_all().to_pylist() if "dm_glosas_auditoria" in tables else []
+                    
+                    sql_serie = f"SELECT periodo, total_internacoes AS total_aihs_aprovadas, 0 AS total_aihs_rejeitadas, valor_total_brl AS valor_aprovado_brl, 0.0 AS valor_glosado_brl, 0.0 AS taxa_rejeicao_pct FROM agg_internacoes_uf WHERE ('{u}' = '' OR uf = '{u}') ORDER BY periodo ASC LIMIT 6"
+                    serie = conn.execute(sql_serie).arrow().read_all().to_pylist() if "agg_internacoes_uf" in tables else []
+
+                    return {
+                        "fonte": "gold_pre_agregado",
+                        "kpis": {
+                            "ticket_medio_brl": kpi_row.get("ticket_medio_brl", 0.0),
+                            "mediana_custo_brl": kpi_row.get("mediana_custo_brl", 0.0),
+                            "custo_total_brl": kpi_row.get("custo_total_brl", 0.0),
+                            "custo_medio_obito_brl": kpi_row.get("custo_medio_obito_brl", 0.0),
+                            "custo_medio_alta_brl": kpi_row.get("custo_medio_alta_brl", 0.0),
+                            "razao_custo_obito_alta": kpi_row.get("razao_custo_obito_alta", 0.0),
+                            "taxa_glosa_pct": kpi_row.get("taxa_glosa_pct", 0.0),
+                        },
+                        "top_motivos_glosa_pareto": pareto,
+                        "custo_por_faixa_permanencia": permanencia,
+                        "serie_temporal_aprovadas_vs_rejeitadas": serie,
+                    }
+
+            # 2. Fallback Dinâmico on-the-fly para competência aberta/não-agregada
+            has_glosas = "dm_glosas_auditoria" in tables
+            glosa_cte = f"""
+            kpi_glosas AS (
+                SELECT
+                    ROUND(COALESCE((SUM(total_glosado_brl) / NULLIF(SUM(total_faturado_brl), 0)) * 100.0, 0.0), 2) AS taxa_glosa_pct
+                FROM dm_glosas_auditoria
+                WHERE (periodo = '{p}' OR ano = '{p}')
+                  AND ('{u}' = '' OR uf = '{u}')
+            )
+            """ if has_glosas else """
+            kpi_glosas AS (
+                SELECT 0.0 AS taxa_glosa_pct
+            )
+            """
+
+            sql_kpi = f"""
+            WITH base_int AS (
+                SELECT valor_total_brl, indicador_obito
+                FROM fct_internacao
+                WHERE (CAST(ano AS VARCHAR) || '-' || LPAD(CAST(mes AS VARCHAR), 2, '0') = '{p}' OR CAST(ano AS VARCHAR) = '{p}')
+                  AND ('{u}' = '' OR uf = '{u}')
+            ),
+            kpi_int AS (
+                SELECT
+                    ROUND(COALESCE(AVG(valor_total_brl), 0.0), 2) AS ticket_medio_brl,
+                    ROUND(COALESCE(MEDIAN(valor_total_brl), 0.0), 2) AS mediana_custo_brl,
+                    ROUND(COALESCE(SUM(valor_total_brl), 0.0), 2) AS custo_total_brl,
+                    ROUND(COALESCE(AVG(CASE WHEN indicador_obito = TRUE THEN valor_total_brl END), 0.0), 2) AS custo_medio_obito_brl,
+                    ROUND(COALESCE(AVG(CASE WHEN indicador_obito = FALSE THEN valor_total_brl END), 0.0), 2) AS custo_medio_alta_brl,
+                    ROUND(COALESCE(AVG(CASE WHEN indicador_obito = TRUE THEN valor_total_brl END) / NULLIF(AVG(CASE WHEN indicador_obito = FALSE THEN valor_total_brl END), 0), 0.0), 2) AS razao_custo_obito_alta
+                FROM base_int
+            ),
+            {glosa_cte}
+            SELECT 
+                kpi_int.ticket_medio_brl,
+                kpi_int.mediana_custo_brl,
+                kpi_int.custo_total_brl,
+                kpi_int.custo_medio_obito_brl,
+                kpi_int.custo_medio_alta_brl,
+                kpi_int.razao_custo_obito_alta,
+                COALESCE(kpi_glosas.taxa_glosa_pct, 0.0) AS taxa_glosa_pct
+            FROM kpi_int CROSS JOIN kpi_glosas;
+            """
+
+            if has_glosas:
+                sql_pareto = f"""
+                WITH motivos AS (
+                    SELECT
+                        codigo_motivo_glosa,
+                        descricao_motivo_glosa,
+                        SUM(total_procedimentos_glosados) AS total_glosas,
+                        ROUND(SUM(total_glosado_brl), 2) AS valor_total_glosado_brl
+                    FROM dm_glosas_auditoria
+                    WHERE (periodo = '{p}' OR ano = '{p}')
+                      AND ('{u}' = '' OR uf = '{u}')
+                    GROUP BY codigo_motivo_glosa, descricao_motivo_glosa
+                ),
+                total_geral AS (
+                    SELECT COALESCE(SUM(valor_total_glosado_brl), 0.0) AS soma_total FROM motivos
+                )
+                SELECT
+                    m.codigo_motivo_glosa,
+                    m.descricao_motivo_glosa,
+                    m.total_glosas,
+                    m.valor_total_glosado_brl,
+                    ROUND((m.valor_total_glosado_brl / NULLIF(t.soma_total, 0)) * 100.0, 2) AS percentual_glosa_pct,
+                    ROUND(SUM(m.valor_total_glosado_brl) OVER (ORDER BY m.valor_total_glosado_brl DESC ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) / NULLIF(t.soma_total, 0) * 100.0, 2) AS percentual_acumulado_pareto_pct
+                FROM motivos m CROSS JOIN total_geral t
+                ORDER BY m.valor_total_glosado_brl DESC
+                LIMIT 10;
+                """
+            else:
+                sql_pareto = None
+
+            sql_perm = f"""
+            SELECT
+                CASE 
+                    WHEN dias_permanencia_real BETWEEN 0 AND 3 THEN '0-3d'
+                    WHEN dias_permanencia_real BETWEEN 4 AND 7 THEN '4-7d'
+                    WHEN dias_permanencia_real BETWEEN 8 AND 14 THEN '8-14d'
+                    WHEN dias_permanencia_real BETWEEN 15 AND 30 THEN '15-30d'
+                    ELSE '>30d'
+                END AS faixa_permanencia,
+                COUNT(*) AS total_internacoes,
+                ROUND(COALESCE(SUM(valor_total_brl), 0.0), 2) AS custo_total_brl,
+                ROUND(COALESCE(AVG(valor_total_brl), 0.0), 2) AS custo_medio_brl,
+                ROUND(COALESCE(AVG(dias_permanencia_real), 0.0), 1) AS media_dias_real
+            FROM fct_internacao
+            WHERE (CAST(ano AS VARCHAR) || '-' || LPAD(CAST(mes AS VARCHAR), 2, '0') = '{p}' OR CAST(ano AS VARCHAR) = '{p}')
+              AND ('{u}' = '' OR uf = '{u}')
+            GROUP BY faixa_permanencia
+            ORDER BY 
+                CASE faixa_permanencia
+                    WHEN '0-3d' THEN 1
+                    WHEN '4-7d' THEN 2
+                    WHEN '8-14d' THEN 3
+                    WHEN '15-30d' THEN 4
+                    ELSE 5
+                END;
+            """
+
+            serie_glosas_cte = f"""
+            aih_glosadas AS (
+                SELECT
+                    periodo,
+                    SUM(total_procedimentos_glosados) AS total_aihs_rejeitadas,
+                    ROUND(SUM(total_glosado_brl), 2) AS valor_glosado_brl
+                FROM dm_glosas_auditoria
+                WHERE ('{u}' = '' OR uf = '{u}')
+                GROUP BY periodo
+            )
+            """ if has_glosas else """
+            aih_glosadas AS (
+                SELECT CAST(NULL AS VARCHAR) AS periodo, 0 AS total_aihs_rejeitadas, 0.0 AS valor_glosado_brl WHERE 1=0
+            )
+            """
+
+            sql_serie = f"""
+            WITH aih_aprovadas AS (
+                SELECT
+                    CAST(ano AS VARCHAR) || '-' || LPAD(CAST(mes AS VARCHAR), 2, '0') AS periodo,
+                    COUNT(*) AS total_aihs_aprovadas,
+                    ROUND(SUM(COALESCE(valor_total_brl, 0.0)), 2) AS valor_aprovado_brl
+                FROM fct_internacao
+                WHERE ('{u}' = '' OR uf = '{u}')
+                GROUP BY ano, mes
+            ),
+            {serie_glosas_cte}
+            SELECT
+                COALESCE(a.periodo, g.periodo) AS periodo,
+                COALESCE(a.total_aihs_aprovadas, 0) AS total_aihs_aprovadas,
+                COALESCE(g.total_aihs_rejeitadas, 0) AS total_aihs_rejeitadas,
+                COALESCE(a.valor_aprovado_brl, 0.0) AS valor_aprovado_brl,
+                COALESCE(g.valor_glosado_brl, 0.0) AS valor_glosado_brl,
+                ROUND(COALESCE((COALESCE(g.total_aihs_rejeitadas, 0) * 100.0) / NULLIF(COALESCE(a.total_aihs_aprovadas, 0) + COALESCE(g.total_aihs_rejeitadas, 0), 0), 0.0), 2) AS taxa_rejeicao_pct
+            FROM aih_aprovadas a
+            FULL OUTER JOIN aih_glosadas g ON a.periodo = g.periodo
+            ORDER BY periodo ASC
+            LIMIT 6;
+            """
+
             kpi_rows = conn.execute(sql_kpi).arrow().read_all().to_pylist()
             kpis = kpi_rows[0] if kpi_rows else {
                 "ticket_medio_brl": 0.0,
@@ -180,11 +226,12 @@ def query_dashboard_financeiro(periodo: str, uf: str = "") -> Dict[str, Any]:
                 "razao_custo_obito_alta": 0.0,
                 "taxa_glosa_pct": 0.0,
             }
-            pareto = conn.execute(sql_pareto).arrow().read_all().to_pylist()
+            pareto = conn.execute(sql_pareto).arrow().read_all().to_pylist() if sql_pareto else []
             permanencia = conn.execute(sql_perm).arrow().read_all().to_pylist()
             serie = conn.execute(sql_serie).arrow().read_all().to_pylist()
 
             return {
+                "fonte": "consulta_tempo_real",
                 "kpis": kpis,
                 "top_motivos_glosa_pareto": pareto,
                 "custo_por_faixa_permanencia": permanencia,
@@ -274,8 +321,55 @@ def query_drilldown_ticket_medio(periodo: str, uf: str = "", limit: int = 50, of
     ORDER BY custo_total_brl DESC;
     """
 
+    p = periodo.replace("'", "").strip()
+    u = uf.replace("'", "").strip().upper() if uf else ""
+
     try:
         with _connect_dw(read_only=True) as conn:
+            tables = [row[0] for row in conn.execute("SHOW TABLES;").fetchall()]
+            
+            # 1. Rota Ultrarrápida Gold Pré-Agregada
+            if "dm_kpi_percentis_hospitalares" in tables:
+                sql_fast_perc = f"SELECT * FROM dm_kpi_percentis_hospitalares WHERE periodo = '{p}' AND uf = '{u}'"
+                fast_rows = conn.execute(sql_fast_perc).arrow().read_all().to_pylist()
+                if fast_rows:
+                    row = fast_rows[0]
+                    kpis = {
+                        "ticket_medio_brl": row.get("ticket_medio_brl", 0.0),
+                        "mediana_custo_brl": row.get("mediana_custo_brl", 0.0),
+                        "p75_custo_brl": row.get("p75", 0.0),
+                        "maximo_custo_brl": row.get("maximo_custo_brl", 0.0),
+                        "minimo_custo_brl": row.get("minimo_custo_brl", 0.0),
+                        "desvio_padrao_brl": row.get("desvio_padrao_brl", 0.0),
+                        "total_internacoes": row.get("total_internacoes", 0)
+                    }
+                    percentis = {
+                        "p25": row.get("p25", 0.0),
+                        "p50": row.get("p50", 0.0),
+                        "p75": row.get("p75", 0.0),
+                        "p90": row.get("p90", 0.0),
+                        "p99": row.get("p99", 0.0)
+                    }
+                    
+                    sql_evolucao = f"SELECT periodo, ROUND(AVG(ticket_medio_brl), 2) AS ticket_medio_brl, ROUND(AVG(mediana_custo_brl), 2) AS mediana_custo_brl, SUM(total_internacoes) AS total_internacoes FROM dm_kpi_percentis_hospitalares WHERE ('{u}' = '' OR uf = '{u}') GROUP BY periodo ORDER BY periodo ASC LIMIT 6"
+                    evolucao = conn.execute(sql_evolucao).arrow().read_all().to_pylist()
+                    
+                    sql_hospitais = f"SELECT codigo_estabelecimento_cnes, uf, total_internacoes, ticket_medio_brl, custo_total_brl FROM dm_hospital_efficiency WHERE periodo = '{p}' AND ('{u}' = '' OR uf = '{u}') ORDER BY custo_total_brl DESC LIMIT {limit} OFFSET {offset}"
+                    hospitais = conn.execute(sql_hospitais).arrow().read_all().to_pylist() if "dm_hospital_efficiency" in tables else []
+                    
+                    sql_uf = f"SELECT uf, SUM(total_internacoes) AS total_internacoes, ROUND(AVG(valor_medio_internacao_brl), 2) AS ticket_medio_brl, ROUND(SUM(valor_total_brl), 2) AS custo_total_brl FROM agg_internacoes_uf WHERE periodo = '{p}' GROUP BY uf ORDER BY custo_total_brl DESC"
+                    quebra_uf = conn.execute(sql_uf).arrow().read_all().to_pylist() if "agg_internacoes_uf" in tables else []
+
+                    return {
+                        "fonte": "gold_pre_agregado",
+                        "kpi_resumo": kpis,
+                        "distribuicao_percentis": percentis,
+                        "evolucao_mensal": evolucao,
+                        "ranking_hospitais_cnes": hospitais,
+                        "quebra_por_uf": quebra_uf,
+                    }
+
+            # 2. Fallback Dinâmico on-the-fly
             kpi_res = conn.execute(sql_kpi).arrow().read_all().to_pylist()
             kpis = kpi_res[0] if kpi_res else {
                 "ticket_medio_brl": 0.0, "mediana_custo_brl": 0.0, "p75_custo_brl": 0.0,
@@ -289,6 +383,7 @@ def query_drilldown_ticket_medio(periodo: str, uf: str = "", limit: int = 50, of
             quebra_uf = conn.execute(sql_uf).arrow().read_all().to_pylist()
 
             return {
+                "fonte": "consulta_tempo_real",
                 "kpi_resumo": kpis,
                 "distribuicao_percentis": percentis,
                 "evolucao_mensal": evolucao,
@@ -645,8 +740,9 @@ def query_central_anomalias(
 
     try:
         with _connect_dw(read_only=True) as conn:
+            tables = [row[0] for row in conn.execute("SHOW TABLES;").fetchall()]
             kpi_res = conn.execute(sql_kpi).arrow().read_all().to_pylist()
-            taxa_res = conn.execute(sql_taxa).arrow().read_all().to_pylist()
+            taxa_res = conn.execute(sql_taxa).arrow().read_all().to_pylist() if "dm_glosas_auditoria" in tables else []
             total_res = conn.execute(sql_count).arrow().read_all().to_pylist()
             grid_rows = conn.execute(sql_grid).arrow().read_all().to_pylist()
 
@@ -765,6 +861,25 @@ def query_painel_glosa_ans(
 
     try:
         with _connect_dw(read_only=True) as conn:
+            tables = [row[0] for row in conn.execute("SHOW TABLES;").fetchall()]
+            if "dm_ans_glosas_operadoras" not in tables:
+                return {
+                    "visao_aplicada": visao,
+                    "kpis_superiores": {
+                        "tempo_medio_pagamento_dias": 0.0,
+                        "taxa_glosa_inicial_pct": 0.0,
+                        "taxa_glosa_final_pct": 0.0,
+                        "pct_guias_sem_retorno_60d": 0.0,
+                        "pct_valor_sem_retorno_60d": 0.0,
+                    },
+                    "alerta_outlier": None,
+                    "detalhamento_glosa_inicial": {
+                        "por_porte": [],
+                        "por_segmentacao": [],
+                        "por_modalidade": [],
+                    }
+                }
+
             base_filter = f"""
             WHERE ('{p}' = '' OR periodo = '{p}' OR ano = '{p}' OR periodo LIKE '{p}%')
               AND ('{mod}' = '' OR modalidade_operadora = '{mod}')
