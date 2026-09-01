@@ -10,17 +10,26 @@ from src.utils.logging_config import setup_logger
 logger = setup_logger(__name__)
 
 
+def _connect_dw(read_only: bool = True):
+    """Abre conexao com o DuckDB DW Gold configurando credenciais S3/MinIO para Delta Lake."""
+    cfg = load_pipeline_config()
+    dw_path = cfg.get("paths", {}).get("gold_dw_file", "warehouse/qimed_dw.duckdb")
+    conn = duckdb.connect(dw_path, read_only=read_only)
+    try:
+        from src.utils.s3_storage import configure_duckdb_s3
+        configure_duckdb_s3(conn)
+    except Exception as e:
+        logger.warning(f"Aviso ao configurar credenciais S3 no DuckDB: {e}")
+    return conn
+
+
 def query_gold(sql: str) -> list[dict]:
     """
     Executa uma consulta SQL na Camada Gold do DuckDB em modo read_only.
     Converte o resultado Arrow em lista de dicionários para serialização JSON.
     """
-    cfg = load_pipeline_config()
-    dw_path = cfg.get("paths", {}).get("gold_dw_file", "warehouse/qimed_dw.duckdb")
     try:
-        from src.utils.s3_storage import configure_duckdb_s3
-        with duckdb.connect(dw_path, read_only=True) as conn:
-            configure_duckdb_s3(conn)
+        with _connect_dw(read_only=True) as conn:
             return conn.execute(sql).arrow().read_all().to_pylist()
     except Exception:
         logger.error(f"Falha na query DuckDB: {sql[:200]}", exc_info=True)
@@ -160,7 +169,7 @@ def query_dashboard_financeiro(periodo: str, uf: str = "") -> Dict[str, Any]:
     """
 
     try:
-        with duckdb.connect(dw_path, read_only=True) as conn:
+        with _connect_dw(read_only=True) as conn:
             kpi_rows = conn.execute(sql_kpi).arrow().read_all().to_pylist()
             kpis = kpi_rows[0] if kpi_rows else {
                 "ticket_medio_brl": 0.0,
@@ -266,7 +275,7 @@ def query_drilldown_ticket_medio(periodo: str, uf: str = "", limit: int = 50, of
     """
 
     try:
-        with duckdb.connect(dw_path, read_only=True) as conn:
+        with _connect_dw(read_only=True) as conn:
             kpi_res = conn.execute(sql_kpi).arrow().read_all().to_pylist()
             kpis = kpi_res[0] if kpi_res else {
                 "ticket_medio_brl": 0.0, "mediana_custo_brl": 0.0, "p75_custo_brl": 0.0,
@@ -362,7 +371,7 @@ def query_drilldown_custo_total(periodo: str, uf: str = "", limit: int = 50, off
     """
 
     try:
-        with duckdb.connect(dw_path, read_only=True) as conn:
+        with _connect_dw(read_only=True) as conn:
             kpi_res = conn.execute(sql_kpi).arrow().read_all().to_pylist()
             kpis = kpi_res[0] if kpi_res else {
                 "custo_total_brl": 0.0, "custo_sh_brl": 0.0, "custo_sp_brl": 0.0, "custo_uti_brl": 0.0,
@@ -491,7 +500,7 @@ def query_drilldown_custo_desfecho(periodo: str, uf: str = "", limit: int = 50, 
     """
 
     try:
-        with duckdb.connect(dw_path, read_only=True) as conn:
+        with _connect_dw(read_only=True) as conn:
             kpi_res = conn.execute(sql_kpi).arrow().read_all().to_pylist()
             kpis = kpi_res[0] if kpi_res else {
                 "total_internacoes": 0, "total_obitos": 0, "total_altas": 0, "taxa_mortalidade_pct": 0.0,
@@ -635,7 +644,7 @@ def query_central_anomalias(
     """
 
     try:
-        with duckdb.connect(dw_path, read_only=True) as conn:
+        with _connect_dw(read_only=True) as conn:
             kpi_res = conn.execute(sql_kpi).arrow().read_all().to_pylist()
             taxa_res = conn.execute(sql_taxa).arrow().read_all().to_pylist()
             total_res = conn.execute(sql_count).arrow().read_all().to_pylist()
@@ -755,7 +764,7 @@ def query_painel_glosa_ans(
     ans = registro_ans.replace("'", "").strip() if registro_ans else ""
 
     try:
-        with duckdb.connect(dw_path, read_only=True) as conn:
+        with _connect_dw(read_only=True) as conn:
             base_filter = f"""
             WHERE ('{p}' = '' OR periodo = '{p}' OR ano = '{p}' OR periodo LIKE '{p}%')
               AND ('{mod}' = '' OR modalidade_operadora = '{mod}')
