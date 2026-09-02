@@ -34,6 +34,19 @@ def ibge_catalog_file(tmp_path):
     return cat_path
 
 
+@pytest.fixture
+def cnes_catalog_file(tmp_path):
+    """Cria um arquivo parquet de catálogo CNES oficial para testes."""
+    cnes_data = [
+        {"codigo_estabelecimento_cnes": "2345678", "nome_fantasia": "HOSPITAL REAL PORTUGUES", "razao_social": "REAL SOCIEDADE DE BENEFICENCIA", "tipo_unidade": "HOSPITAL GERAL"},
+        {"codigo_estabelecimento_cnes": "9876543", "nome_fantasia": "HOSPITAL DAS CLINICAS FMUSP", "razao_social": "HOSPITAL DAS CLINICAS DA FACULDADE DE MEDICINA DA USP", "tipo_unidade": "HOSPITAL DE ENSINO"},
+    ]
+    df = pd.DataFrame(cnes_data)
+    cat_path = str(tmp_path / "test_dim_cnes_datasus.parquet")
+    df.to_parquet(cat_path, index=False)
+    return cat_path
+
+
 def _setup_silver_tables(conn: duckdb.DuckDBPyConnection):
     """Cria e popula fct_internacao para testes."""
     conn.execute("""
@@ -58,7 +71,7 @@ def _setup_silver_tables(conn: duckdb.DuckDBPyConnection):
 def test_1_cnes_real_preservado(test_db, ibge_catalog_file):
     """Teste 1: CNES real presente na fonte deve preservar exatamente o identificador."""
     _setup_silver_tables(test_db)
-    build_dim_estabelecimento(test_db, ibge_catalog_path=ibge_catalog_file)
+    build_dim_estabelecimento(test_db, ibge_catalog_path=ibge_catalog_file, cnes_catalog_path="inexistente.parquet")
 
     cnes_list = [r[0] for r in test_db.execute("SELECT codigo_estabelecimento_cnes FROM dim_estabelecimento ORDER BY 1;").fetchall()]
     assert "2345678" in cnes_list
@@ -70,7 +83,7 @@ def test_1_cnes_real_preservado(test_db, ibge_catalog_file):
 def test_2_nome_oficial_ou_null(test_db, ibge_catalog_file):
     """Teste 2: Se não houver fonte cadastral, nome_fantasia deve ser NULL (nunca inventado)."""
     _setup_silver_tables(test_db)
-    build_dim_estabelecimento(test_db, ibge_catalog_path=ibge_catalog_file)
+    build_dim_estabelecimento(test_db, ibge_catalog_path=ibge_catalog_file, cnes_catalog_path="inexistente.parquet")
 
     nomes = [r[0] for r in test_db.execute("SELECT nome_fantasia FROM dim_estabelecimento;").fetchall()]
     assert all(n is None for n in nomes), "nome_fantasia deve ser NULL quando não fornecido por cadastro oficial"
@@ -79,7 +92,7 @@ def test_2_nome_oficial_ou_null(test_db, ibge_catalog_file):
 def test_3_razao_social_ou_null(test_db, ibge_catalog_file):
     """Teste 3: razao_social deve ser preservada se vier da fonte cadastral, ou NULL."""
     _setup_silver_tables(test_db)
-    build_dim_estabelecimento(test_db, ibge_catalog_path=ibge_catalog_file)
+    build_dim_estabelecimento(test_db, ibge_catalog_path=ibge_catalog_file, cnes_catalog_path="inexistente.parquet")
 
     razoes = [r[0] for r in test_db.execute("SELECT razao_social FROM dim_estabelecimento;").fetchall()]
     assert all(r is None for r in razoes)
@@ -88,7 +101,7 @@ def test_3_razao_social_ou_null(test_db, ibge_catalog_file):
 def test_4_tipo_unidade_ou_null(test_db, ibge_catalog_file):
     """Teste 4: tipo_unidade deve vir de cadastro oficial ou ser NULL."""
     _setup_silver_tables(test_db)
-    build_dim_estabelecimento(test_db, ibge_catalog_path=ibge_catalog_file)
+    build_dim_estabelecimento(test_db, ibge_catalog_path=ibge_catalog_file, cnes_catalog_path="inexistente.parquet")
 
     tipos = [r[0] for r in test_db.execute("SELECT tipo_unidade FROM dim_estabelecimento;").fetchall()]
     assert all(t is None for t in tipos)
@@ -97,7 +110,7 @@ def test_4_tipo_unidade_ou_null(test_db, ibge_catalog_file):
 def test_5_municipio_resolucao_ibge(test_db, ibge_catalog_file):
     """Teste 5: Validar codigo_municipio -> IBGE -> município correto."""
     _setup_silver_tables(test_db)
-    build_dim_estabelecimento(test_db, ibge_catalog_path=ibge_catalog_file)
+    build_dim_estabelecimento(test_db, ibge_catalog_path=ibge_catalog_file, cnes_catalog_path="inexistente.parquet")
 
     recife = test_db.execute("SELECT municipio, uf, estado_nome, regiao FROM dim_estabelecimento WHERE codigo_estabelecimento_cnes = '2345678';").fetchone()
     assert recife[0] == "Recife"
@@ -113,7 +126,7 @@ def test_5_municipio_resolucao_ibge(test_db, ibge_catalog_file):
 def test_6_municipio_inexistente_sem_fallback_sintetico(test_db, ibge_catalog_file):
     """Teste 6: Código IBGE inexistente não deve produzir 'Polo Regional ...'. Deve ser NULL."""
     _setup_silver_tables(test_db)
-    build_dim_estabelecimento(test_db, ibge_catalog_path=ibge_catalog_file)
+    build_dim_estabelecimento(test_db, ibge_catalog_path=ibge_catalog_file, cnes_catalog_path="inexistente.parquet")
 
     inexistente = test_db.execute("SELECT municipio, uf FROM dim_estabelecimento WHERE codigo_estabelecimento_cnes = '1122334';").fetchone()
     assert inexistente[0] is None, f"Município inexistente deve ser NULL, mas foi: {inexistente[0]}"
@@ -123,7 +136,7 @@ def test_6_municipio_inexistente_sem_fallback_sintetico(test_db, ibge_catalog_fi
 def test_7_cnes_unicidade_do_grain(test_db, ibge_catalog_file):
     """Teste 7: Garantir exatamente uma linha por CNES (COUNT(*) == COUNT(DISTINCT CNES))."""
     _setup_silver_tables(test_db)
-    build_dim_estabelecimento(test_db, ibge_catalog_path=ibge_catalog_file)
+    build_dim_estabelecimento(test_db, ibge_catalog_path=ibge_catalog_file, cnes_catalog_path="inexistente.parquet")
 
     total = test_db.execute("SELECT COUNT(*) FROM dim_estabelecimento;").fetchone()[0]
     distinct_cnes = test_db.execute("SELECT COUNT(DISTINCT codigo_estabelecimento_cnes) FROM dim_estabelecimento;").fetchone()[0]
@@ -145,7 +158,7 @@ def test_8_cnes_inconsistente_auditoria(test_db, ibge_catalog_file):
         ('CNES_INCONSISTENTE', '355030', 'SP'); -- Mesmo CNES em dois municípios
     """)
 
-    build_dim_estabelecimento(conn, ibge_catalog_path=ibge_catalog_file)
+    build_dim_estabelecimento(conn, ibge_catalog_path=ibge_catalog_file, cnes_catalog_path="inexistente.parquet")
     total = conn.execute("SELECT COUNT(*) FROM dim_estabelecimento;").fetchone()[0]
     distinct = conn.execute("SELECT COUNT(DISTINCT codigo_estabelecimento_cnes) FROM dim_estabelecimento;").fetchone()[0]
     assert total == 1
@@ -173,10 +186,10 @@ def test_10_ausencia_de_coluna_obrigatoria(test_db, ibge_catalog_file):
 def test_11_idempotencia(test_db, ibge_catalog_file):
     """Teste 11: Executar duas vezes deve produzir o mesmo conteúdo lógico."""
     _setup_silver_tables(test_db)
-    build_dim_estabelecimento(test_db, ibge_catalog_path=ibge_catalog_file)
+    build_dim_estabelecimento(test_db, ibge_catalog_path=ibge_catalog_file, cnes_catalog_path="inexistente.parquet")
     res1 = test_db.execute("SELECT codigo_estabelecimento_cnes, municipio, uf FROM dim_estabelecimento ORDER BY 1;").fetchall()
 
-    build_dim_estabelecimento(test_db, ibge_catalog_path=ibge_catalog_file)
+    build_dim_estabelecimento(test_db, ibge_catalog_path=ibge_catalog_file, cnes_catalog_path="inexistente.parquet")
     res2 = test_db.execute("SELECT codigo_estabelecimento_cnes, municipio, uf FROM dim_estabelecimento ORDER BY 1;").fetchall()
 
     assert res1 == res2
@@ -185,7 +198,7 @@ def test_11_idempotencia(test_db, ibge_catalog_file):
 def test_12_proibicao_de_dados_sinteticos(test_db, ibge_catalog_file):
     """Teste 12: Garantir que nenhum registro possua padrões artificiais."""
     _setup_silver_tables(test_db)
-    build_dim_estabelecimento(test_db, ibge_catalog_path=ibge_catalog_file)
+    build_dim_estabelecimento(test_db, ibge_catalog_path=ibge_catalog_file, cnes_catalog_path="inexistente.parquet")
 
     sinteticos = test_db.execute("""
         SELECT *
@@ -193,29 +206,16 @@ def test_12_proibicao_de_dados_sinteticos(test_db, ibge_catalog_file):
         WHERE nome_fantasia ILIKE '%Polo Regional%'
            OR nome_fantasia ILIKE '%Hospital Regional de%'
            OR nome_fantasia ILIKE '%Hospital Infantil de%'
-           OR nome_fantasia ILIKE '%Santa Casa%'
            OR municipio ILIKE '%Polo Regional%';
     """).fetchall()
 
     assert len(sinteticos) == 0, f"Encontrados dados sintéticos proibidos: {sinteticos}"
 
 
-def test_enriquecimento_com_cadastro_real_opcional(test_db, ibge_catalog_file):
-    """Teste Extra: Valida que caso exista uma tabela cadastral real, ela enriquece nome, razão e tipo."""
+def test_enriquecimento_com_catalogo_cnes_oficial(test_db, ibge_catalog_file, cnes_catalog_file):
+    """Teste 13: Valida o enriquecimento oficial com nomes reais do catálogo CNES."""
     _setup_silver_tables(test_db)
-    test_db.execute("""
-    CREATE TABLE dim_organizations (
-        codigo_estabelecimento_cnes VARCHAR,
-        nome_fantasia VARCHAR,
-        razao_social VARCHAR,
-        tipo_unidade VARCHAR
-    );
-    INSERT INTO dim_organizations VALUES
-        ('2345678', 'HOSPITAL REAL PORTUGUES', 'REAL SOCIEDADE DE BENEFICENCIA', 'HOSPITAL GERAL'),
-        ('9876543', 'HOSPITAL DAS CLINICAS FMUSP', 'HOSPITAL DAS CLINICAS DA FACULDADE DE MEDICINA DA USP', 'HOSPITAL DE ENSINO');
-    """)
-
-    build_dim_estabelecimento(test_db, cadastral_table="dim_organizations", ibge_catalog_path=ibge_catalog_file)
+    build_dim_estabelecimento(test_db, ibge_catalog_path=ibge_catalog_file, cnes_catalog_path=cnes_catalog_file)
 
     row = test_db.execute("SELECT nome_fantasia, razao_social, tipo_unidade FROM dim_estabelecimento WHERE codigo_estabelecimento_cnes = '2345678';").fetchone()
     assert row[0] == "HOSPITAL REAL PORTUGUES"

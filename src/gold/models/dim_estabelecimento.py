@@ -2,16 +2,18 @@
 Modelo Gold: dim_estabelecimento (Produção).
 
 Materializa a dimensão de estabelecimentos de saúde (dim_estabelecimento) no DuckDB DW
-baseada exclusivamente em fontes factuais reais da camada Silver e no catálogo
-oficial de municípios do IBGE (5.570 municípios).
+baseada exclusivamente em fontes factuais reais da camada Silver, no catálogo
+oficial de municípios do IBGE (5.570 municípios) e no catálogo oficial de estabelecimentos
+do DATASUS / Ministério da Saúde (config/dim_cnes_datasus.parquet).
 
 Princípios de Engenharia de Dados aplicados:
-  1. Zero dados sintéticos: remoção de nomes arbitrários gerados por templates ou fórmulas (ex: "Hospital Regional de X", "Polo Regional Y");
-  2. Resolução territorial oficial: cruzamento determinístico e de alta performance no DuckDB via catálogo oficial do IBGE;
-  3. Grain canônico e estrito: 1 registro = 1 estabelecimento CNES (codigo_estabelecimento_cnes);
-  4. Validação estrita de contratos Silver (Fail Fast): falha explícita se fontes ou colunas obrigatórias estiverem ausentes;
-  5. Detecção de inconsistências: auditoria de integridade para CNES com múltiplos municípios/UFs;
-  6. Idempotência e processamento nativo em SQL DuckDB (sem loops Python iterativos).
+  1. Zero dados sintéticos: dados cadastrais extraídos diretamente das fontes governamentais oficiais;
+  2. Resolução territorial oficial: cruzamento determinístico no DuckDB via catálogo oficial do IBGE;
+  3. Enriquecimento cadastral oficial: cruzamento nativo com o catálogo oficial do CNES/DATASUS;
+  4. Grain canônico e estrito: 1 registro = 1 estabelecimento CNES (codigo_estabelecimento_cnes);
+  5. Validação estrita de contratos Silver (Fail Fast): falha explícita se fontes ou colunas obrigatórias estiverem ausentes;
+  6. Detecção de inconsistências: auditoria de integridade para CNES com múltiplos municípios/UFs;
+  7. Idempotência e processamento nativo em SQL DuckDB.
 """
 import os
 from typing import Optional, Set
@@ -77,24 +79,28 @@ def build_dim_estabelecimento(
     target_table: str = "dim_estabelecimento",
     fct_table: str = "fct_internacao",
     ibge_catalog_path: Optional[str] = None,
+    cnes_catalog_path: Optional[str] = None,
     cadastral_table: Optional[str] = None,
 ) -> None:
     """
     Materializa a dimensão Gold dim_estabelecimento no DuckDB DW a partir
-    estritamente dos dados factuais reais e do catálogo oficial do IBGE.
+    estritamente dos dados factuais reais, do catálogo oficial do IBGE e do catálogo oficial CNES.
     """
     logger.info(f"[GOLD] Iniciando materialização da dimensão {target_table}...")
 
-    # Define o caminho padrão do catálogo IBGE caso não seja especificado
-    if not ibge_catalog_path:
-        base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-        ibge_catalog_path = os.path.join(base_dir, "config", "dim_municipios_ibge.parquet")
+    base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-    # 1. Validação estrita do contrato Silver e catálogo IBGE (Fail Fast)
+    # 1. Define caminhos padrão dos catálogos
+    if not ibge_catalog_path:
+        ibge_catalog_path = os.path.join(base_dir, "config", "dim_municipios_ibge.parquet")
+    if not cnes_catalog_path:
+        cnes_catalog_path = os.path.join(base_dir, "config", "dim_cnes_datasus.parquet")
+
+    # 2. Validação estrita do contrato Silver e catálogo IBGE (Fail Fast)
     _validate_source_contracts(conn, fct_table=fct_table, ibge_catalog_path=ibge_catalog_path)
     ibge_path_sql = ibge_catalog_path.replace("\\", "/")
 
-    # 2. Detecção e auditoria de inconsistências de CNES (múltiplos municípios ou UFs)
+    # 3. Detecção e auditoria de inconsistências de CNES (múltiplos municípios ou UFs)
     sql_inconsistencias = f"""
     SELECT
         TRIM(CAST(codigo_estabelecimento_cnes AS VARCHAR)) AS cnes,
@@ -110,25 +116,35 @@ def build_dim_estabelecimento(
     inconsistencias = conn.execute(sql_inconsistencias).fetchall()
     if inconsistencias:
         logger.warning(
-            f"[DATA QUALITY AUDIT] Detectadas {len(inconsistencias)} inconsistências territoriais para CNES em '{fct_table}'. "
-            f"Exemplos: {inconsistencias[:5]}"
+            f"[DATA QUALITY AUDIT] Detectadas {len(inconsistencias)} inconsistências territoriais para CNES em '{fct_table}'."
         )
     else:
         logger.info(f"[DATA QUALITY AUDIT] Zero inconsistências territoriais de CNES detectadas em '{fct_table}'.")
 
-    # 3. Verifica se existe tabela cadastral oficial de estabelecimentos para enriquecimento opcional
+    # 4. Configuração de Enriquecimento Cadastral (via Parquet ou Tabela Cadastral)
     existing_tables = {row[0].lower() for row in conn.execute("SHOW TABLES;").fetchall()}
-    has_cadastral = cadastral_table and cadastral_table.lower() in existing_tables
+    has_cadastral_table = cadastral_table and cadastral_table.lower() in existing_tables
+    has_cnes_parquet = cnes_catalog_path and os.path.exists(cnes_catalog_path)
 
-    if has_cadastral:
-        logger.info(f"[GOLD] Enriquecendo com cadastro oficial da tabela '{cadastral_table}'.")
+    if has_cadastral_table:
+        logger.info(f"[GOLD] Enriquecendo com cadastro da tabela '{cadastral_table}'.")
         cad_cols = _get_table_columns(conn, cadastral_table)
         nome_expr = "cad.nome_fantasia" if "nome_fantasia" in cad_cols else "CAST(NULL AS VARCHAR)"
         razao_expr = "cad.razao_social" if "razao_social" in cad_cols else "CAST(NULL AS VARCHAR)"
         tipo_expr = "cad.tipo_unidade" if "tipo_unidade" in cad_cols else "CAST(NULL AS VARCHAR)"
         cadastral_join = f"""
         LEFT JOIN {cadastral_table} cad
-            ON c.codigo_estabelecimento_cnes = TRIM(CAST(cad.codigo_estabelecimento_cnes AS VARCHAR))
+            ON c.codigo_estabelecimento_cnes = LPAD(TRIM(CAST(cad.codigo_estabelecimento_cnes AS VARCHAR)), 7, '0')
+        """
+    elif has_cnes_parquet:
+        cnes_path_sql = cnes_catalog_path.replace("\\", "/")
+        logger.info(f"[GOLD] Enriquecendo com catálogo oficial CNES '{cnes_path_sql}'.")
+        nome_expr = "cad.nome_fantasia"
+        razao_expr = "cad.razao_social"
+        tipo_expr = "cad.tipo_unidade"
+        cadastral_join = f"""
+        LEFT JOIN '{cnes_path_sql}' cad
+            ON c.codigo_estabelecimento_cnes = LPAD(TRIM(CAST(cad.codigo_estabelecimento_cnes AS VARCHAR)), 7, '0')
         """
     else:
         nome_expr = "CAST(NULL AS VARCHAR)"
@@ -136,19 +152,19 @@ def build_dim_estabelecimento(
         tipo_expr = "CAST(NULL AS VARCHAR)"
         cadastral_join = ""
 
-    # 4. SQL Canônico de Materialização Gold (Processamento nativo e idempotente em DuckDB)
+    # 5. SQL Canônico de Materialização Gold (Processamento nativo e idempotente em DuckDB)
     sql_build_gold = f"""
     CREATE OR REPLACE TABLE {target_table} AS
     WITH cnes_fatos AS (
         -- Agrupa estabelecimentos válidos presentes na Fato
         SELECT
-            TRIM(CAST(codigo_estabelecimento_cnes AS VARCHAR)) AS codigo_estabelecimento_cnes,
+            LPAD(TRIM(CAST(codigo_estabelecimento_cnes AS VARCHAR)), 7, '0') AS codigo_estabelecimento_cnes,
             ANY_VALUE(TRIM(CAST(codigo_municipio_hospital AS VARCHAR))) AS codigo_municipio_hospital,
             ANY_VALUE(TRIM(CAST(uf AS VARCHAR))) AS uf_fato
         FROM {fct_table}
         WHERE codigo_estabelecimento_cnes IS NOT NULL 
           AND TRIM(CAST(codigo_estabelecimento_cnes AS VARCHAR)) != ''
-        GROUP BY TRIM(CAST(codigo_estabelecimento_cnes AS VARCHAR))
+        GROUP BY LPAD(TRIM(CAST(codigo_estabelecimento_cnes AS VARCHAR)), 7, '0')
     ),
     cnes_enriquecido AS (
         SELECT
@@ -174,26 +190,20 @@ def build_dim_estabelecimento(
 
     conn.execute(sql_build_gold)
 
-    # 5. Auditoria de Qualidade e Métricas Pós-Materialização
+    # 6. Auditoria de Qualidade e Métricas Pós-Materialização
     total_count = conn.execute(f"SELECT COUNT(*) FROM {target_table};").fetchone()[0]
     distinct_cnes = conn.execute(f"SELECT COUNT(DISTINCT codigo_estabelecimento_cnes) FROM {target_table};").fetchone()[0]
     resolvidos_ibge = conn.execute(f"SELECT COUNT(*) FROM {target_table} WHERE municipio IS NOT NULL;").fetchone()[0]
-    sem_ibge = total_count - resolvidos_ibge
-    taxa_ibge_pct = (resolvidos_ibge / total_count * 100.0) if total_count > 0 else 0.0
+    nomes_preenchidos = conn.execute(f"SELECT COUNT(*) FROM {target_table} WHERE nome_fantasia IS NOT NULL;").fetchone()[0]
 
     logger.info(
         f"[GOLD] Dimensão {target_table} materializada com sucesso! "
         f"Total: {total_count} estabelecimentos | CNES únicos: {distinct_cnes} | "
-        f"Municípios IBGE resolvidos: {resolvidos_ibge} ({taxa_ibge_pct:.1f}%) | "
-        f"Municípios não resolvidos: {sem_ibge}."
+        f"Nomes CNES oficiais: {nomes_preenchidos} ({nomes_preenchidos/total_count*100.0:.1f}%) | "
+        f"Municípios IBGE: {resolvidos_ibge} ({resolvidos_ibge/total_count*100.0:.1f}%)."
     )
 
-    if sem_ibge > 0:
-        logger.warning(
-            f"[QUALITY METRIC] {sem_ibge} estabelecimentos possuem código municipal sem correspondência no catálogo oficial IBGE."
-        )
-
-    # 6. Asserção estrita de integridade dimensional (Grain: 1 linha por CNES)
+    # 7. Asserção estrita de integridade dimensional (Grain: 1 linha por CNES)
     assert total_count == distinct_cnes, (
         f"[FATAL INTEGRITY ERROR] Violação de unicidade de chave primária em {target_table}: "
         f"total={total_count} != distinct={distinct_cnes}"
