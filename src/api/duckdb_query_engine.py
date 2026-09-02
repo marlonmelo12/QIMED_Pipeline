@@ -12,10 +12,17 @@ logger = setup_logger(__name__)
 
 
 def _connect_dw(read_only: bool = True):
-    """Abre conexão com o DuckDB DW Gold local em modo somente leitura de alta performance."""
+    """Abre conexão com o DuckDB DW Gold local com retry resiliente contra locks transitórios."""
+    import time
     cfg = load_pipeline_config()
     dw_path = cfg.get("paths", {}).get("gold_dw_file", "warehouse/qimed_dw.duckdb")
-    return duckdb.connect(dw_path, read_only=read_only)
+    for attempt in range(8):
+        try:
+            return duckdb.connect(dw_path, read_only=read_only)
+        except duckdb.IOException:
+            if attempt == 7:
+                raise
+            time.sleep(0.5 * (attempt + 1))
 
 
 def query_gold(sql: str) -> list[dict]:
@@ -1202,11 +1209,11 @@ def query_painel_glosa_ans(
                 }
 
             base_filter = f"""
-            WHERE ('{p}' = '' OR periodo = '{p}' OR ano = '{p}' OR periodo LIKE '{p}%')
-              AND ('{mod}' = '' OR modalidade_operadora ILIKE '%{mod}%')
-              AND ('{seg}' = '' OR segmentacao_operadora ILIKE '%{seg}%')
-              AND ('{por}' = '' OR porte_operadora ILIKE '{por}%')
-              AND ('{ans}' = '' OR codigo_registro_ans = '{ans}')
+            WHERE ('{p}' = '' OR CAST(periodo AS VARCHAR) = '{p}' OR CAST(ano AS VARCHAR) = '{p}' OR CAST(periodo AS VARCHAR) LIKE '{p}%')
+              AND ('{mod}' = '' OR CAST(modalidade_operadora AS VARCHAR) ILIKE '%{mod}%')
+              AND ('{seg}' = '' OR CAST(segmentacao_operadora AS VARCHAR) ILIKE '%{seg}%')
+              AND ('{por}' = '' OR CAST(porte_operadora AS VARCHAR) ILIKE '{por}%')
+              AND ('{ans}' = '' OR CAST(codigo_registro_ans AS VARCHAR) = '{ans}')
             """
 
             # 1. Carrega todas as operadoras do período para detecção estatística de outlier (MAD)
@@ -1258,7 +1265,7 @@ def query_painel_glosa_ans(
             ),
             filtrada AS (
                 SELECT * FROM base_op
-                WHERE ('{por}' = '' OR porte_operadora ILIKE '{por}%')
+                WHERE ('{por}' = '' OR CAST(porte_operadora AS VARCHAR) ILIKE '{por}%')
                   AND ('{seg}' = '' OR segmentacao_operadora ILIKE '%{seg}%')
             )
             SELECT
@@ -1299,7 +1306,7 @@ def query_painel_glosa_ans(
                 ROUND(COALESCE(SUM(valor_total_glosado_brl), 0.0), 2) AS valor_glosado_brl,
                 ROUND(COALESCE(SUM(valor_total_faturado_brl), 0.0), 2) AS total_faturado_brl
             FROM base_op
-            WHERE ('{seg}' = '' OR segmentacao_operadora ILIKE '%{seg}%')
+            WHERE ('{seg}' = '' OR CAST(segmentacao_operadora AS VARCHAR) ILIKE '%{seg}%')
             GROUP BY porte_operadora
             ORDER BY total_faturado_brl DESC;
             """
@@ -1319,7 +1326,7 @@ def query_painel_glosa_ans(
                 ROUND(COALESCE(SUM(valor_total_glosado_brl), 0.0), 2) AS valor_glosado_brl,
                 ROUND(COALESCE(SUM(valor_total_faturado_brl), 0.0), 2) AS total_faturado_brl
             FROM base_op
-            WHERE ('{por}' = '' OR porte_operadora ILIKE '{por}%')
+            WHERE ('{por}' = '' OR CAST(porte_operadora AS VARCHAR) ILIKE '{por}%')
             GROUP BY segmentacao_operadora
             ORDER BY total_faturado_brl DESC;
             """
@@ -1339,7 +1346,7 @@ def query_painel_glosa_ans(
                 ROUND(COALESCE(SUM(valor_total_glosado_brl), 0.0), 2) AS valor_glosado_brl,
                 ROUND(COALESCE(SUM(valor_total_faturado_brl), 0.0), 2) AS total_faturado_brl
             FROM base_op
-            WHERE ('{por}' = '' OR porte_operadora ILIKE '{por}%')
+            WHERE ('{por}' = '' OR CAST(porte_operadora AS VARCHAR) ILIKE '{por}%')
               AND ('{seg}' = '' OR segmentacao_operadora = '{seg}')
             GROUP BY modalidade_operadora
             ORDER BY valor_glosado_brl DESC;

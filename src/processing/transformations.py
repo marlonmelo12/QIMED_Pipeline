@@ -198,7 +198,7 @@ class CanonicalTransformations:
             if lakehouse_path_exists(sih_silver_path):
                 sih_cte = f"""
                 WITH aih_paciente_map AS (
-                    -- Mapeamento canônico 1:1 por AIH para herança do MPI
+                    -- Mapeamento canônico 1:1 por AIH para herança do MPI com pushdown
                     SELECT 
                         numero_aih,
                         ANY_VALUE(pseudonimo_paciente) AS pseudonimo_paciente_sih,
@@ -206,6 +206,7 @@ class CanonicalTransformations:
                         ANY_VALUE(codigo_municipio_hospital) AS munic_hosp_sih
                     FROM delta_scan('{sih_silver_path}')
                     WHERE numero_aih IS NOT NULL
+                      AND numero_aih IN (SELECT DISTINCT CAST(numero_aih AS VARCHAR) FROM delta_scan('{raw_rss_path}') WHERE numero_aih IS NOT NULL)
                     GROUP BY numero_aih
                 )
                 """
