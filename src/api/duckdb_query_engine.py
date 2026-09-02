@@ -663,7 +663,7 @@ def query_central_anomalias(
     # 2. Hospitais com Maior Taxa de Rejeição (Widget Top 5)
     sql_top_hospitais = f"""
     SELECT
-        COALESCE(e.nome_fantasia, 'Hospital Regional de ' || a.uf) AS hospital_nome,
+        COALESCE(e.nome_fantasia, 'CNES ' || a.codigo_estabelecimento_cnes) AS hospital_nome,
         a.codigo_estabelecimento_cnes AS cnes,
         a.uf,
         COUNT(*) AS total_anomalias,
@@ -764,7 +764,7 @@ def query_central_anomalias(
         a.numero_aih,
         a.codigo_estabelecimento_cnes,
         a.uf,
-        COALESCE(e.nome_fantasia, 'Hospital Regional de ' || a.uf) AS nome_hospital,
+        COALESCE(e.nome_fantasia, 'CNES ' || a.codigo_estabelecimento_cnes) AS nome_hospital,
         COALESCE(e.municipio, a.uf) AS municipio_hospital,
         a.codigo_procedimento_realizado,
         a.tipo_anomalia,
@@ -970,10 +970,10 @@ def query_drilldown_anomalia(id_alerta: str) -> Dict[str, Any]:
         a.status_operacional,
         a.criado_em,
         a.versao_regra,
-        COALESCE(e.nome_fantasia, 'Hospital Regional de ' || a.uf) AS nome_hospital,
-        COALESCE(e.razao_social, 'ESTABELECIMENTO DE SAUDE') AS razao_social_hospital,
+        COALESCE(e.nome_fantasia, 'CNES ' || a.codigo_estabelecimento_cnes) AS nome_hospital,
+        COALESCE(e.razao_social, 'NÃO INFORMADA') AS razao_social_hospital,
         COALESCE(e.municipio, a.uf) AS municipio_hospital,
-        COALESCE(e.tipo_unidade, 'Hospital Geral') AS tipo_unidade
+        COALESCE(e.tipo_unidade, 'NÃO INFORMADO') AS tipo_unidade
     FROM aud_alertas_anomalias a
     LEFT JOIN dim_estabelecimento e ON a.codigo_estabelecimento_cnes = e.codigo_estabelecimento_cnes
     WHERE a.id_alerta = '{id_clean}'
